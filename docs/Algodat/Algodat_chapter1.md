@@ -1,4 +1,7 @@
 ---
+layout: default
+title: Chapter 1 — Stable Matching & Five Problems
+---
 
 # Chapter 1 — Stable Matching & Five Representative Problems  
 **Exam-ready, bilingual summary (EN ↔ RU) with proofs, algorithms, and key takeaways**  
