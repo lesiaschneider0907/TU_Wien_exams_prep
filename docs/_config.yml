@@ -1,1 +1,14 @@
+title: "TU Wien — Algodat Notes"
+description: "Chapter 1 summary with MathJax"
+# GitHub Pages использует kramdown; включаем поддержку MathJax
+markdown: kramdown
+kramdown:
+  input: GFM
+  math_engine: mathjax
+  hard_wrap: false
+
+# Если ваш проект будет открываться как https://user.github.io/repo/,
+# baseurl оставляем пустым; relative_url в шаблоне сам подставит префикс.
+# Если знаете baseurl, можно явно указать:
+# baseurl: "/<имя_репозитория>"
 
