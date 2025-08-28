@@ -31,8 +31,8 @@ title: Chapter 1 — Stable Matching & Five Representative Problems
 1. Пока есть свободный $m$ с непросмотренными женщинами — предлагает лучшей из ещё не предложенных $w$.
 2. Если $w$ свободна — помолвка; иначе $w$ оставляет более предпочтительного из $\{m,m'\}$.
 
-![Figure 1.2 – Intermediate GS state]({{ '/images/fig1_2.png' | relative_url }})  
-*Figure 1.2 – State of G-S algorithm when a free man proposes to a woman.*
+![Figure 1.2 – Intermediate GS state](images/fig1_2.png)  
+*Figure 1.2 – An intermediate state of the G-S algorithm when a free man m is proposing to a woman w.*
 
 **Key invariants / Инварианты**
 - **Women:** once first proposal arrives, always engaged; partners only improve.  
@@ -55,14 +55,14 @@ title: Chapter 1 — Stable Matching & Five Representative Problems
 
 ### Graph Basics / База по графам
 
-![Figure 1.3 – Graphs on four nodes]({{ '/images/fig1_3.png' | relative_url }})  
-*Figure 1.3 – Graphs (a) and (b) with four nodes.*
+![Figure 1.3 – Graphs on four nodes](images/fig1_3.png)  
+*Figure 1.3 – Each of (a) and (b) depicts a graph on four nodes.*
 
 ---
 
 ### Interval Scheduling (Greedy) / Планирование интервалов (жадно)
 
-![Figure 1.4 – Interval Scheduling instance]({{ '/images/fig1_4.png' | relative_url }})  
+![Figure 1.4 – Interval Scheduling instance](images/fig1_4.png)  
 *Figure 1.4 – An instance of the Interval Scheduling Problem.*
 
 **EN**
@@ -96,7 +96,7 @@ title: Chapter 1 — Stable Matching & Five Representative Problems
 
 ### Bipartite Matching (Augmentation/Flow) / Двудольное паросочетание
 
-![Figure 1.5 – Bipartite graph]({{ '/images/fig1_5.png' | relative_url }})  
+![Figure 1.5 – Bipartite graph](images/fig1_5.png)  
 *Figure 1.5 – A bipartite graph.*
 
 **Core ideas / Основы**
@@ -108,8 +108,8 @@ title: Chapter 1 — Stable Matching & Five Representative Problems
 
 ### Independent Set (NP-complete) / Независимое множество (NP-полная)
 
-![Figure 1.6 – Graph with maximum independent set]({{ '/images/fig1_6.png' | relative_url }})  
-*Figure 1.6 – A graph with independent set of size 4.*
+![Figure 1.6 – Graph with maximum independent set](images/fig1_6.png)  
+*Figure 1.6 – A graph whose largest independent set has size 4.*
 
 - **Definition:** $S\subseteq V$ independent ⇔ no two adjacent.  
 - **Power:** models “choose many with pairwise conflicts”.  
@@ -120,8 +120,8 @@ title: Chapter 1 — Stable Matching & Five Representative Problems
 
 ### Competitive Facility Location (PSPACE) / Конкурентное размещение (PSPACE)
 
-![Figure 1.7 – Facility location instance]({{ '/images/fig1_7.png' | relative_url }})  
-*Figure 1.7 – Instance of the Competitive Facility Location Problem.*
+![Figure 1.7 – Facility location instance](images/fig1_7.png)  
+*Figure 1.7 – An instance of the Competitive Facility Location Problem.*
 
 - Two players alternate picking weighted vertices; chosen set must stay independent; P2 targets sum $\ge B$.  
 - **Complexity:** PSPACE-complete — strategy existence is harder than NP-complete; certification may require exploring an exponential game tree.
