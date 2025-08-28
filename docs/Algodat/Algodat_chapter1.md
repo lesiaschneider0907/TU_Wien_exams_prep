@@ -11,6 +11,51 @@ title: Chapter 1 — Stable Matching & Five Representative Problems
 ## 1.1 Stable Matching / Устойчивое совпадение
 
 ### Definitions / Определения
+# Stable Matching Problem — Formal Definition
+
+## English
+
+A **Stable Matching Problem** instance consists of:
+
+- Two disjoint sets of equal size  
+  \(M = \{m_1, m_2, \dots, m_n\}\) (men) and  
+  \(W = \{w_1, w_2, \dots, w_n\}\) (women).
+- Each \(m \in M\) has a **strict preference order** over all members of \(W\).
+- Each \(w \in W\) has a **strict preference order** over all members of \(M\).
+
+A **matching** \(S\) is a set of disjoint pairs \((m,w)\) with \(m \in M, w \in W\).
+
+- \(S\) is **perfect** if every \(m \in M\) and every \(w \in W\) appears in exactly one pair.
+
+A pair \((m,w)\notin S\) is called a **blocking pair** (or **instability**) if:
+
+1. \(m\) prefers \(w\) to his partner in \(S\), and  
+2. \(w\) prefers \(m\) to her partner in \(S\).
+
+A **stable matching** is a perfect matching with **no blocking pairs**.
+
+---
+
+## Русский
+
+Задача **устойчивого совпадения (Stable Matching)** формулируется так:
+
+- Даны два множества одинакового размера:  
+  \(M = \{m_1, m_2, \dots, m_n\}\) (мужчины) и  
+  \(W = \{w_1, w_2, \dots, w_n\}\) (женщины).
+- Каждый \(m \in M\) имеет **строгий порядок предпочтений** по всем женщинам из \(W\).
+- Каждая \(w \in W\) имеет **строгий порядок предпочтений** по всем мужчинам из \(M\).
+
+**Совпадение** \(S\) — это множество попарных пар \((m,w)\), где \(m \in M, w \in W\), такое что ни один человек не встречается более чем в одной паре.
+
+- Совпадение называется **совершенным**, если каждый элемент \(M\) и \(W\) встречается ровно в одной паре.
+
+Пара \((m,w)\notin S\) называется **разрушающей парой (instability)**, если:
+
+1. \(m\) предпочитает \(w\) своей партнерше в \(S\), и  
+2. \(w\) предпочитает \(m\) своему партнеру в \(S\).
+
+**Устойчивое совпадение** — это совершенное совпадение, в котором **нет разрушающих пар**.
 
 **Instability (blocking pair):** $(m,w')\notin S$ where both prefer each other to current partners.
 
