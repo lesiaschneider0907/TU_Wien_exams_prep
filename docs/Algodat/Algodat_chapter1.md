@@ -42,7 +42,7 @@ _Figures referenced: 1.1–1.7._
 - **Instability (blocking pair)** (Fig. 1.1): \((m,w')\notin S\) where \(m\) prefers \(w'\) to his partner in \(S\), and \(w'\) prefers \(m\) to hers.
 - **Stable matching:** perfect + no blocking pair.
 
-![Figure 1.1 – Instability example]({{ '/images/fig1_1.png' | relative_url }})
+![Figure 1.1 – Instability example]({{ '/images/fig1_1.png' }})
 
 **RU**
 - Множества одинакового размера: мужчины \(M\), женщины \(W\). Строгие предпочтения.
