@@ -14,8 +14,9 @@ title: Chapter 1 — Stable Matching & Five Representative Problems
 
 **Instability (blocking pair):** $(m,w')\notin S$ where both prefer each other to current partners.
 
-![Figure 1.1 – Instability in matching]({{ '/images/fig1_1.png' | relative_url }})  
+![Figure 1.1 – Instability in matching](images/fig1_1.png)  
 *Figure 1.1 – Perfect matching with instability (m,w’).*
+
 
 ---
 
