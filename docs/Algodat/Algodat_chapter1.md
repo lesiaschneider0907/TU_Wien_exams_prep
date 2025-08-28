@@ -45,7 +45,7 @@ title: Chapter 1 — Stable Matching & Five Representative Problems
 
 **Optimality & “Unfairness” / Оптимальность и «нечестность»**
 - **Valid partner:** $w$ is valid for $m$ if some stable matching contains $(m,w)$.  
-- **Men-optimal $S^\*$:** each man gets $\operatorname{best}(m)$ — his best valid partner; all executions of men-proposing GS return the **same** $S^\*$.  
+- **Men-optimal $S^\*$:** Men-optimal $S^*$: each man gets $\mathrm{best}(m)$ — his best valid partner; all executions of men-proposing GS return the **same** $S^\*$.  
 - **Dual:** each woman gets her **worst** valid partner in $S^\*$; если предлагают женщины — роли меняются.  
 - **Multiplicity:** multiple stable matchings can exist (men-optimal vs women-optimal).
 
