@@ -1,0 +1,236 @@
+---
+title: "Exercise 7"
+subtitle: "Bootstraping Practicals IV"
+author: "Olesia Galynskaia 12321492"
+date: "2025"
+output: pdf_document
+---
+
+# Fix the random seed for reproducibility
+```{r seed, echo=TRUE}
+set.seed(12321492)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width = 6, fig.height = 4, dpi = 150)
+```
+
+# Task 12
+
+## 1. Redo the analysis for the survival data but without the outlying observation
+
+I start with the survival dataset used in the lecture example.  
+First, I inspect the relationship between dose and survival time on a log scale in order to detect possible outlying observations.  
+From the scatter plot one observation stands out with a much larger survival time than the rest of the sample.  
+Using which.max(surv), this observation is identified and removed from the data.
+
+```{r}
+library(boot)
+
+# load survival data from the boot package
+data(survival)
+
+# initial visualization to detect outliers
+plot(survival$dose, survival$surv, log = "y",
+     xlab = "Dose", ylab = "Survival time")
+
+# identify the outlying observation
+which.max(survival$surv)
+
+# remove the outlying observation
+outlier_id <- which.max(survival$surv)
+survival_no <- survival[-outlier_id, ]
+```
+
+*Linear regression without the outlier*
+
+```{r}
+fit_no <- lm(log(surv) ~ dose, data = survival_no)
+summary(fit_no)
+```
+
+After removing the outlying observation, the linear regression of log(surv) on dose shows a clear negative relationship between dose and survival time.
+The estimated slope is -0.0057 and is highly significant, indicating that higher doses are associated with shorter survival times on the log scale.
+The model explains a substantial part of the variability in the data, with an adjusted R-squared of about 0.66.
+
+*Pairs bootstrap*
+
+```{r}
+reg.fun.no <- function(x, i) {
+  x.i <- x[i, ]
+  fit <- lm(log(surv) ~ dose, data = x.i)
+  coef(fit)
+}
+
+surv.boot.no <- boot(survival_no, reg.fun.no, R = 1000)
+surv.boot.no
+```
+
+The pairs bootstrap confirms the regression results obtained from the reduced sample.  
+The bootstrap standard error of the slope is relatively small, and the bootstrap distribution is centered close to the original estimate.  
+This indicates that, after removing the outlier, the estimated effect of dose is stable and not driven by a single influential observation.  
+
+Overall, removing the outlying observation leads to more stable regression and bootstrap results, while the negative effect of dose on survival time remains clearly present.
+
+## 2. Redo the analysis with the full sample but using function rq with tau = 0.5
+
+I use quantile regression with tau = 0.5, which corresponds to median regression.
+
+```{r}
+library(quantreg)
+
+# quantile regression (median regression) on the full sample
+fit_rq <- rq(log(surv) ~ dose, data = survival, tau = 0.5)
+summary(fit_rq)
+```
+
+The estimated slope is negative, indicating that higher doses are associated with shorter survival times at the median level.  
+The confidence interval for the slope does not include zero, which suggests that the effect of dose is statistically significant.  
+Compared to ordinary least squares regression, the median regression is less influenced by the extreme survival time and provides a more robust estimate of the central tendency of the data.
+
+## 3. Comparison of the results from 1 and 2
+
+```{r}
+ols_coef <- coef(fit_no)
+
+rq_coef <- coef(fit_rq)
+
+comparison_table <- data.frame(
+  Method = c("OLS without outlier", "Median regression (tau = 0.5)"),
+  Intercept = c(ols_coef[1], rq_coef[1]),
+  Dose_effect = c(ols_coef[2], rq_coef[2])
+)
+
+comparison_table
+```
+
+In Task 12.1, the analysis was performed after removing the outlying observation and using ordinary least squares regression.  
+In Task 12.2, the full sample was used, but median regression was applied instead, which is less sensitive to outliers.  
+Both approaches lead to a negative and significant effect of dose on survival time, indicating a consistent relationship between dose and survival.  
+However, the median regression yields more robust estimates in the presence of the outlier, while removing the outlier leads to more stable results for the mean-based regression.  
+Overall, both methods confirm the same qualitative conclusion, but they address the influence of the outlying observation in different ways.
+
+# Task 13
+
+## 1. Create a sample of size 200 from the model
+I generate a sample of size $n = 200$ from the model
+\[
+y = 3 + 2x_1 + x_2 + \varepsilon,
+\]
+where $x_1 \sim \mathcal{N}(2,3)$, $x_2 \sim U(2,4)$, $x_3 \sim U(-2,2)$ and $\varepsilon \sim t_5$.
+
+The predictor $x_3$ is generated.
+
+```{r}
+n <- 200
+
+x1 <- rnorm(n, mean = 2, sd = sqrt(3))
+x2 <- runif(n, min = 2, max = 4)
+x3 <- runif(n, min = -2, max = 2)
+
+eps <- rt(n, df = 5)
+
+y <- 3 + 2 * x1 + x2 + eps
+
+# create data frame
+dat <- data.frame(y, x1, x2, x3)
+
+summary(dat)
+```
+
+
+## 2. Residual bootstrap
+I apply the residual bootstrap for the linear regression model
+\[
+y = \beta_0 + \beta_1 x_1 + \beta_2 x_2 + \beta_3 x_3 + \varepsilon.
+\]
+
+This approach treats the residuals as the independent and identically distributed part of the data and assumes that the regression model is correctly specified.  
+
+Percentile bootstrap confidence intervals are computed for the regression coefficients.  
+The confidence interval for $\beta_3$ is used to assess whether the predictor $x_3$ can be excluded.   
+
+If the confidence interval contains zero, $\beta_3$ is not statistically significant and can be excluded from the model.
+
+```{r}
+library(boot)
+
+# fit model once on original data
+fit <- lm(y ~ x1 + x2 + x3, data = dat)
+yhat <- fitted(fit)
+res  <- resid(fit)
+
+# statistic function: fit same model and return coefficients
+stat_fun <- function(d) {
+  coef(lm(y ~ x1 + x2 + x3, data = d))
+}
+
+# generator for residual bootstrap: keep x's, resample residuals, rebuild y
+ran_gen <- function(d, mle) {
+  d$y <- mle$yhat + sample(mle$res, replace = TRUE)
+  d
+}
+
+# store "mle" (here: yhat and residuals) for ran_gen
+mle_obj <- data.frame(yhat = yhat, res = res)
+
+# run residual bootstrap
+res_boot <- boot(dat, statistic = stat_fun, R = 1000,
+                sim = "parametric", ran.gen = ran_gen, mle = mle_obj)
+
+# percentile CI for beta_3 (coefficient of x3 is index 4)
+boot.ci(res_boot, type = "perc", index = 4)
+
+```
+
+My first attempt did not produce bootstrap confidence intervals because the bootstrap statistic was identical in all resamples.  
+This happened because the index argument was not used and the model was fitted on the full data in every replication.  
+After fixing the resampling step, the residual bootstrap produces a non-degenerate bootstrap distribution and percentile confidence intervals can be computed.  
+
+The residual bootstrap produces a percentile confidence interval for the coefficient $\beta_3$ of (-0.0788, 0.1848).  
+
+Since this interval contains zero, the coefficient $\beta_3$ is not statistically significant.
+Therefore, based on the residual bootstrap results, the predictor $x_3$ can be excluded from the linear regression model.
+
+
+## 3. Pairs bootstrap
+
+I next apply the pairs bootstrap, where entire observation vectors
+\[
+(y_i, x_{1i}, x_{2i}, x_{3i})
+\]
+are resampled with replacement.
+
+This approach does not rely on assumptions about the residuals and is more robust to model misspecification.  
+
+Again, percentile bootstrap confidence intervals are computed for the regression coefficients.  
+The confidence interval for $\beta_3$ obtained from the pairs bootstrap is used to decide whether $x_3$ can be excluded.
+
+```{r}
+# bootstrap function for pairs bootstrap
+pair_fun <- function(data, i) {
+  data_i <- data[i, ]
+  coef(lm(y ~ x1 + x2 + x3, data = data_i))
+}
+
+# pairs bootstrap
+pair_boot <- boot(dat, pair_fun, R = 1000)
+
+# percentile CI for beta_3 (index = 4)
+pair_ci_x3 <- boot.ci(pair_boot, type = "perc", index = 4)
+pair_ci_x3
+```
+
+
+The pairs bootstrap yields a percentile confidence interval for the coefficient $\beta_3$ of (-0.0895, 0.1851).  
+
+Since this interval contains zero, the coefficient $\beta_3$ is not statistically significant.
+Therefore, based on the pairs bootstrap results, the predictor $x_3$ can also be excluded from the model.  
+
+
+## 4. Summary
+
+For both bootstrap methods, percentile confidence intervals were computed for the coefficient $\beta_3$.  
+In the residual bootstrap, the 95% confidence interval was (-0.0788, 0.1848). In the pairs bootstrap, the corresponding interval was (-0.0895, 0.1851).
+
+Since both confidence intervals contain zero, the coefficient $\beta_3$ is not statistically significant under either bootstrap approach.  
+Therefore, the predictor $x_3$ can be excluded from the model.
+
+Both bootstrap methods lead to the same conclusion, providing consistent evidence that $x_3$ does not contribute to explaining the response variable y.
