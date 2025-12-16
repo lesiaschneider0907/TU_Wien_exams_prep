@@ -1,0 +1,461 @@
+---
+title: "Exercise 7 (2025) — Advanced Methods for Regression and Classification"
+author: "Olesia Galynskaia 12321492"
+date: "`r format(Sys.Date())`"
+output: pdf_document
+fontsize: 11pt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+set.seed(12321492)
+options(repos = c(CRAN = "https://cran.wu.ac.at"))
+#install.packages("MASS")
+#install.packages("klaR")
+#install.packages("caret")
+library(dplyr)
+library(ggplot2)
+library(MASS)   # lda, qda
+library(klaR)   # rda
+library(caret)  # createDataPartition
+```
+
+# Loading and observing data (part before task 1 is copied from Exercise Sheet 6)
+```{r}
+d <- read.csv("bank.csv", sep = ";")
+d <- d %>% dplyr::select(-duration)
+
+# y as factor
+d$y <- factor(d$y, levels = c("no", "yes"))
+
+# Quick inspection
+str(d)
+table(d$y)
+prop.table(table(d$y))
+
+ggplot(d, aes(x = y)) +
+  geom_bar() +
+  labs(
+    title = "Class distribution of y",
+    x = "Term deposit subscription",
+    y = "Count"
+  )
+
+```
+
+## Train/test split
+```{r}
+set.seed(12321492)
+
+train_idx <- createDataPartition(d$y, p = 2/3, list = FALSE)
+
+train <- d[train_idx, ]
+test  <- d[-train_idx, ]
+
+nrow(train)
+nrow(test)
+
+prop.table(table(train$y))
+prop.table(table(test$y))
+
+```
+
+## Evaluation metrics (misclassification + balanced accuracy)
+```{r}
+eval_measures <- function(actual, predicted) {
+  
+  cm <- table(Actual = actual, Predicted = predicted)
+  
+  # Ensure all cells exist (prevent missing categories)
+  levs <- c("no", "yes")
+  for (a in levs) {
+    for (p in levs) {
+      if (!(a %in% rownames(cm) && p %in% colnames(cm))) {
+        cm[a, p] <- 0
+      }
+    }
+  }
+  
+  cm <- cm[levs, levs]  # reorder matrix
+  
+  TN <- cm["no",  "no"]
+  FP <- cm["no",  "yes"]
+  FN <- cm["yes", "no"]
+  TP <- cm["yes", "yes"]
+  
+  miscl <- (FP + FN) / sum(cm)
+  
+  TPR <- ifelse(TP + FN > 0, TP / (TP + FN), NA)  # sensitivity
+  TNR <- ifelse(TN + FP > 0, TN / (TN + FP), NA)  # specificity
+  
+  bal_acc <- (TPR + TNR) / 2
+  
+  data.frame(
+    Misclassification = miscl,
+    Sensitivity = TPR,
+    Specificity = TNR,
+    BalancedAccuracy = bal_acc
+  )
+}
+
+```
+
+
+## Comment
+
+The data describe customers who were contacted during a marketing campaign for term deposits.  
+Most variables are simple demographic or financial characteristics like age, job type, marital status, education, and balance on their account.
+
+
+The main issue is the outcome variable y: almost everyone said no.  
+Only about 11 percent of customers actually subscribed, so the dataset is strongly imbalanced.  
+Models that focus only on accuracy will mostly learn to predict “no” for everyone and look “good,” even though they completely fail on the minority class.
+
+
+Because of this imbalance, we can't rely only on plain misclassification error.  
+We will need balanced accuracy and similar metrics to judge models fairly, especially for the minority class yes.
+
+
+Apart from that, the data structure is straightforward, and after removing duration (as required), nothing looks broken or suspicious.
+
+# Ex-1 
+
+## 1(a) Logistic regression
+```{r}
+# Logistic regression on the training set
+logit_fit <- glm(y ~ ., data = train, family = "binomial")
+
+summary(logit_fit)
+```
+
+### Comment
+
+The logistic regression shows that only a few variables clearly affect the chance of subscribing.  
+
+Some job types matter: for example, blue-collar has a significant negative coefficient, meaning these customers are less likely to subscribe compared to the baseline job group.  
+
+The variable default = yes has a positive effect, but this comes from data quirks and should not be overinterpreted.  
+
+Customers who already have a loan are less likely to subscribe, which fits the negative coefficient of loanyes.  
+
+The contact type contact = unknown strongly reduces the probability of subscription. This category has a large negative and highly significant effect.  
+
+Several months show significant effects. Some months increase the chance (for example March), while others decrease it (such as November or December).  
+This means timing of the call has an influence in this dataset.
+
+The variable campaign has a negative effect: when a person is contacted many times, the probability of saying yes becomes smaller.  
+
+The variable duration is extremely significant and positive. This is expected, because successful calls are usually longer.  
+This is also the reason why duration must be removed in the next steps: it leaks information about the outcome.
+
+Finally, poutcome = success has a very strong positive coefficient.  
+If a customer said yes in a previous campaign, they are far more likely to say yes again.
+
+Overall, the model finds a few meaningful effects, but many variables are not significant.  
+This is normal because the dataset contains many categories and the "yes" class is quite small.
+
+## 1(b) Predictions, confusion table, misclassification rates, balanced accuracy
+```{r}
+prob_test <- predict(logit_fit, newdata = test, type = "response")
+
+# Convert probabilities to class labels
+pred_test <- ifelse(prob_test > 0.5, "yes", "no")
+pred_test <- factor(pred_test, levels = c("no", "yes"))
+
+# Confusion table
+cm <- table(Actual = test$y, Predicted = pred_test)
+cm
+
+# Misclassification rates for each class
+miscl_no  <- cm["no","yes"]  / sum(cm["no",])
+miscl_yes <- cm["yes","no"] / sum(cm["yes",])
+
+miscl_no
+miscl_yes
+
+# Balanced accuracy (using our eval function)
+eval_measures(test$y, pred_test)
+```
+
+### Comment
+
+The model predicts the no class very well, but performs poorly on the yes class.  
+Out of 1333 actual no cases, only 14 were misclassified, giving a misclassification rate of about 1%.  
+For the yes class the situation is much worse: 148 out of 173 yes customers were predicted as no, which is a misclassification rate of about 86%.  
+
+This happens because the dataset is strongly imbalanced, and the model mainly learns to predict no.  
+The balanced accuracy is about 0.57, which is clearly lower than the plain accuracy and shows that the model struggles to detect the minority class.  
+
+## 1(c) Weighted logistic regression
+
+```{r}
+# Compute class frequencies in the training set
+n_no  <- sum(train$y == "no")
+n_yes <- sum(train$y == "yes")
+
+# Weights: inverse frequency (common simple choice)
+w_no  <- 1 / n_no
+w_yes <- 1 / n_yes
+
+# Vector of weights for glm()
+weights_vec <- ifelse(train$y == "yes", w_yes, w_no)
+
+# Fit weighted logistic regression
+logit_w <- glm(y ~ ., data = train, family = "binomial",
+               weights = weights_vec)
+
+# Predict on test set
+prob_w <- predict(logit_w, newdata = test, type = "response")
+pred_w <- ifelse(prob_w > 0.5, "yes", "no")
+pred_w <- factor(pred_w, levels = c("no", "yes"))
+
+# Confusion table
+cm_w <- table(Actual = test$y, Predicted = pred_w)
+cm_w
+
+# Balanced accuracy
+eval_measures(test$y, pred_w)
+
+```
+
+### Comment
+
+To deal with the class imbalance, we gave a larger weight to the minority class yes and a smaller weight to the majority class no.  
+The idea is that mistakes on the rare class should count more for the model.
+
+After applying class weights, the model predicts more yes cases than before.
+This reduces the misclassification for the minority class:
+
+As a result:  
+
+-- For the no class, the misclassification increases: 341 of 1333 no cases were predicted as yes.  
+
+-- For the yes class, the misclassification becomes smaller: only 74 of 173 yes cases were predicted as no.  
+
+The balanced accuracy rises to about 0.66, which is higher than the unweighted model (0.57).
+This means that weighting improves how the model handles both classes, even though the accuracy for the majority class becomes worse.
+
+## 1(d) Stepwise variable selection
+
+```{r}
+# Stepwise selection on the weighted model (from 1c)
+logit_w_step <- step(logit_w, direction = "both", trace = FALSE)
+
+summary(logit_w_step)
+
+# Predict on test set
+prob_w_step <- predict(logit_w_step, newdata = test, type = "response")
+pred_w_step <- ifelse(prob_w_step > 0.5, "yes", "no")
+pred_w_step <- factor(pred_w_step, levels = c("no", "yes"))
+
+# Confusion table
+cm_w_step <- table(Actual = test$y, Predicted = pred_w_step)
+cm_w_step
+
+# Balanced accuracy
+eval_measures(test$y, pred_w_step)
+
+
+```
+
+### Comment
+
+The stepwise procedure removed all predictors and kept only the intercept.  
+This means that, according to the step algorithm and the weighted likelihood, none of the variables improved the model enough to justify keeping them.  
+
+The resulting model predicts only the majority class yes (because with weighting the model “thinks” that this is the safest choice).  
+As a result, the confusion table shows that all yes cases are predicted correctly, and all no cases are predicted incorrectly.  
+
+The balanced accuracy becomes 0.50, which is worse than the weighted model from part (1c), where the balanced accuracy was around 0.81.  
+
+So stepwise selection does not improve the model here.  
+In fact, it makes the performance much worse, because the simplified model ignores all predictors and collapses to predicting a single class.
+
+# Ex-2 
+
+## Loading and observing data
+```{r}
+library(ISLR)
+
+# Load the Khan data
+data(Khan)
+
+# Inspect structure
+str(Khan)
+```
+
+The Khan dataset contains gene expression measurements for small round blue cell tumors.
+Each sample has 2308 features, which are gene expression levels, and the goal is to classify the tumor type (four possible classes).
+
+The main challenge of this data is the extreme p >> n situation:
+there are over two thousand predictors but only 63 training samples.
+This makes the dataset very high-dimensional and difficult for classical methods that need stable covariance estimates.
+
+The training and test sets are already separated in the dataset (xtrain, ytrain, xtest, ytest), so no additional splitting is needed.
+
+## 2(a) Why LDA or QDA would not work, and whether RDA would work
+
+```{r}
+library(klaR)
+
+# RDA model (rows = observations, columns = features)
+rda_model <- rda(Khan$xtrain, grouping = Khan$ytrain)
+
+# Predict on the test set
+rda_pred <- predict(rda_model, Khan$xtest)$class
+
+# Confusion table
+table(Actual = Khan$ytest, Predicted = rda_pred)
+```
+
+LDA and QDA do not work well for this dataset because the number of features is extremely large compared to the number of samples.
+We have 2308 predictors, but only 63 training observations. This is a classic p >> n situation.
+
+Both LDA and QDA need to estimate covariance matrices.
+To do that, they need enough data. When there are far more predictors than samples, the covariance matrices become singular (not invertible).
+If the covariance matrix is singular, LDA and QDA cannot run properly, because the formulas they use require matrix inversion.
+
+QDA is even worse than LDA here, because QDA has to estimate one covariance matrix per class, and some classes have only a few training samples.
+So the matrices will definitely be singular.
+
+RDA can work, because it uses regularization.
+It shrinks the covariance matrices toward simpler forms (for example, toward a diagonal matrix).
+This regularization prevents the matrices from becoming singular, so RDA can handle the p >> n setting much better.
+
+RDA can be fitted without numerical problems and produces valid predictions on the test set.
+The confusion table shows that the classifier tends to predict class 4 for many samples,  
+which is expected due to the extreme p >> n setting and the very small number of test observations.  
+Even though the accuracy is not high, RDA still performs much better than LDA or QDA, which cannot be fitted at all.
+
+## 2(b) Multinomial glmnet with cross-validation
+
+```{r}
+library(glmnet)
+
+# Prepare data for glmnet: matrix X and factor y
+x_train <- as.matrix(Khan$xtrain)
+y_train <- factor(Khan$ytrain)
+
+set.seed(12321492)
+
+cv_fit <- cv.glmnet(
+  x = x_train,
+  y = y_train,
+  family = "multinomial",
+  type.measure = "deviance"  # cross-validated deviance
+)
+
+# Plot cross-validated deviance vs log(lambda)
+plot(cv_fit)
+
+# Show chosen lambda values
+cv_fit$lambda.min
+cv_fit$lambda.1se
+```
+### Comment
+
+The function cv.glmnet() fits a penalized multinomial logistic regression model and uses cross-validation to choose the best amount of shrinkage.
+The plot shows how the cross-validated deviance changes for different values of lambda.
+
+For very small lambda (left side), the penalty is weak and the model is basically trying to fit everything. The deviance is high, which usually means overfitting on such small data.
+As lambda increases, the model becomes more stable, and the deviance goes down.
+The lowest deviance appears near lambda.min (about 0.004). This is the value where the model fits the data best according to cross-validation.
+
+lambda.1se (about 0.006) is a slightly larger value of lambda that is still within one standard-error of the minimum. In simple words, it is a safer choice: the model is simpler, more regularized, and still performs almost as well. Because the dataset is tiny compared to the number of predictors, a slightly stronger penalty is usually the more reasonable option.
+
+The objective function that glmnet minimizes is the multinomial negative log-likelihood plus the penalty term.
+So the method searches for the lambda that gives the lowest cross-validated deviance, which is why these two particular lambda values were selected.
+
+## 2(c) Multinomial glmnet with cross-validation
+```{r}
+# Extract coefficients for lambda.min (best model)
+coef_list <- coef(cv_fit, s = "lambda.min")
+
+# coef_list is a list with 4 elements (one for each class)
+length(coef_list)
+
+# Count how many features are non-zero in each class
+nonzero <- sapply(coef_list, function(m) sum(m != 0))
+nonzero
+
+# Identify which variables are active at least for one class
+active_vars <- Reduce("+", lapply(coef_list, function(m) as.numeric(m != 0))) > 0
+
+which(active_vars)
+length(which(active_vars))
+```
+
+### Comment 
+The model returns four coefficient vectors, one for each class.  
+Most of the 2308 genes have a coefficient equal to zero, which is expected because the L1 penalty forces the model to keep only the most useful variables.
+
+For the four classes, the numbers of non-zero coefficients are 11, 7, 9, and 12.  
+Across all classes combined, only 36 genes have a non-zero coefficient at lambda.min.  
+These are the variables that actually contribute to the model.  
+All other genes are shrunk to zero and ignored.  
+
+
+## 2(d)
+```{r}
+library(ggplot2)
+
+# Choose one active variable relevant for class 1
+var_id <- 1   # you can replace with any index from the active list
+
+# Extract its values from the training data
+gene_values <- Khan$xtrain[, var_id]
+
+# Build a small dataframe for plotting
+df_plot <- data.frame(
+  value = gene_values,
+  group = factor(Khan$ytrain)
+)
+
+# Plot: variable vs group
+ggplot(df_plot, aes(x = group, y = value, color = group)) +
+  geom_boxplot() +
+  labs(
+    title = paste("Gene", var_id, "values across groups"),
+    x = "Group",
+    y = "Expression level"
+  ) +
+  theme_minimal()
+```
+
+### Comment
+
+Gene 1 clearly separates the first group from the others.  
+Group 1 has much lower expression values, while groups 2-4 have noticeably higher levels.  
+Because of this clear difference, the model keeps this gene: it carries a strong signal for distinguishing class 1 from the rest.  
+
+
+## 2(e)
+```{r}
+# Prepare test data
+x_test <- as.matrix(Khan$xtest)
+y_test <- Khan$ytest
+
+# Predict probabilities for each class using lambda.min
+pred_probs <- predict(cv_fit, newx = x_test, s = "lambda.min", type = "response")
+
+# glmnet returns an array: observations × 4 classes × 1
+# We need to pick the class with the largest probability
+pred_class <- apply(pred_probs[, , 1], 1, which.max)
+
+# Confusion table
+cm_glmnet <- table(Actual = y_test, Predicted = pred_class)
+cm_glmnet
+
+# Misclassification error on test data
+miscl <- mean(pred_class != y_test)
+miscl
+```
+
+### Comment
+
+Using the multinomial glmnet model with lambda.min, I predicted the classes for the test data.  
+The predict function returns probabilities for all four groups, so I selected the class with the highest probability for each observation.
+
+The confusion table shows a perfect result: all 20 test samples were classified correctly.  
+The misclassification error is zero.  
+This is realistic for this dataset because the groups differ strongly in a few genes, and the regularized model picks up exactly those signals.

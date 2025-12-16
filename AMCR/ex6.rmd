@@ -1,0 +1,516 @@
+---
+title: "Exercise 6 (2025) — Advanced Methods for Regression and Classification"
+author: "Olesia Galynskaia 12321492"
+date: "`r format(Sys.Date())`"
+output: pdf_document
+fontsize: 11pt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+set.seed(12321492)
+options(repos = c(CRAN = "https://cran.wu.ac.at"))
+#install.packages("MASS")
+#install.packages("klaR")
+#install.packages("caret")
+library(dplyr)
+library(ggplot2)
+library(MASS)   # lda, qda
+library(klaR)   # rda
+library(caret)  # createDataPartition
+```
+
+# Loading and observing data
+```{r}
+d <- read.csv("bank.csv", sep = ";")
+
+# y as factor
+d$y <- factor(d$y, levels = c("no", "yes"))
+
+# Quick inspection
+str(d)
+table(d$y)
+prop.table(table(d$y))
+
+ggplot(d, aes(x = y)) +
+  geom_bar() +
+  labs(
+    title = "Class distribution of y",
+    x = "Term deposit subscription",
+    y = "Count"
+  )
+
+```
+
+## Train/test split
+```{r}
+set.seed(12321492)
+
+train_idx <- createDataPartition(d$y, p = 2/3, list = FALSE)
+
+train <- d[train_idx, ]
+test  <- d[-train_idx, ]
+
+nrow(train)
+nrow(test)
+
+prop.table(table(train$y))
+prop.table(table(test$y))
+
+```
+
+## Evaluation metrics (misclassification + balanced accuracy)
+```{r}
+eval_measures <- function(actual, predicted) {
+  
+  cm <- table(Actual = actual, Predicted = predicted)
+  
+  # Ensure all cells exist (prevent missing categories)
+  levs <- c("no", "yes")
+  for (a in levs) {
+    for (p in levs) {
+      if (!(a %in% rownames(cm) && p %in% colnames(cm))) {
+        cm[a, p] <- 0
+      }
+    }
+  }
+  
+  cm <- cm[levs, levs]  # reorder matrix
+  
+  TN <- cm["no",  "no"]
+  FP <- cm["no",  "yes"]
+  FN <- cm["yes", "no"]
+  TP <- cm["yes", "yes"]
+  
+  miscl <- (FP + FN) / sum(cm)
+  
+  TPR <- ifelse(TP + FN > 0, TP / (TP + FN), NA)  # sensitivity
+  TNR <- ifelse(TN + FP > 0, TN / (TN + FP), NA)  # specificity
+  
+  bal_acc <- (TPR + TNR) / 2
+  
+  data.frame(
+    Misclassification = miscl,
+    Sensitivity = TPR,
+    Specificity = TNR,
+    BalancedAccuracy = bal_acc
+  )
+}
+
+```
+
+
+## Comment
+
+The data describe customers who were contacted during a marketing campaign for term deposits.  
+Most variables are simple demographic or financial characteristics like age, job type, marital status, education, and balance on their account.
+
+
+The main issue is the outcome variable y: almost everyone said no.  
+Only about 11 percent of customers actually subscribed, so the dataset is strongly imbalanced.  
+Models that focus only on accuracy will mostly learn to predict “no” for everyone and look “good,” even though they completely fail on the minority class.
+
+
+Because of this imbalance, we can't rely only on plain misclassification error.  
+We will need balanced accuracy and similar metrics to judge models fairly, especially for the minority class yes.
+
+
+Apart from that, the data structure is straightforward, and after removing duration (as required), nothing looks broken or suspicious.
+
+# Ex-1 
+
+## 1(a) Apply lda() & preprocessing
+```{r}
+# Convert character predictors to factors for LDA
+train_lda <- train %>%
+  mutate(across(where(is.character), factor))
+
+# Fit LDA model on the training set
+lda_fit <- lda(y ~ ., data = train_lda)
+
+lda_fit
+
+str(train_lda)
+```
+
+### Comment
+
+The main preprocessing step is to convert all categorical variables that are stored as character (job, marital, education, contact, month, poutcome) into factors.
+
+The variables are already on reasonable scales,so no further transformation seems necessary.
+
+## 1(b) Evaluation on the training data
+```{r}
+# Predict on the training set
+pred_train <- predict(lda_fit, train_lda)$class
+
+# Compute evaluation measures
+eval_train <- eval_measures(train_lda$y, pred_train)
+eval_train
+```
+
+### Comment
+
+The LDA model looks good only at first glance. The overall misclassification 
+is low because the model predicts “no” very confidently, and most people in the 
+data actually said no. 
+
+But when you look at the two classes separately, the picture is different. 
+The model has very high specificity (it almost always gets “no” right) but only 
+moderate sensitivity. It catches less than half of the actual “yes” cases. 
+
+The balanced accuracy shows this clearly: it is much lower than the plain accuracy. 
+So LDA learns the majority class well but is still weak at detecting the minority group.
+
+## 1(c) Evaluation on the test data
+
+```{r}
+# Convert characters to factors also in the test set
+test_lda <- test %>%
+  mutate(across(where(is.character), factor))
+
+# Predict on the test set
+pred_test <- predict(lda_fit, test_lda)$class
+
+# Compute evaluation measures
+eval_test <- eval_measures(test_lda$y, pred_test)
+eval_test
+```
+
+### Comment
+
+On the test data the LDA model behaves the same way as on the training set.  
+It predicts the majority class “no” very reliably, which keeps the overall 
+misclassification low.  
+But the sensitivity drops even more here, meaning the 
+model misses many of the actual “yes” cases.
+
+The specificity stays very high, so the model clearly prefers predicting “no”.  
+Because of this imbalance in performance, the balanced accuracy is noticeably 
+lower than the plain accuracy.
+
+In short, the model generalizes consistently, but it still struggles with the 
+minority class and is not good at finding the “yes” customers.
+
+# Ex-2 
+
+## 2(a) Undersampling
+
+```{r}
+set.seed(12321492)
+
+# Count class sizes in the original training set
+n_no  <- sum(train$y == "no")
+n_yes <- sum(train$y == "yes")
+
+# Smallest group size
+min_n <- min(n_no, n_yes)
+
+# Undersample: take min_n samples from each class
+undersampled <- train %>%
+  group_by(y) %>%
+  slice_sample(n = min_n) %>%
+  ungroup()
+
+# Check new class balance
+table(undersampled$y)
+
+# Convert character variables to factors
+undersampled_lda <- undersampled %>%
+  mutate(across(where(is.character), factor))
+
+# Fit LDA on the undersampled training set
+lda_under <- lda(y ~ ., data = undersampled_lda)
+
+# Evaluation on undersampled TRAIN set
+pred_train_under <- predict(lda_under, undersampled_lda)$class
+eval_under_train <- eval_measures(undersampled_lda$y, pred_train_under)
+eval_under_train
+
+# Evaluation on the unchanged TEST set
+test_lda <- test %>%
+  mutate(across(where(is.character), factor))
+
+pred_test_under <- predict(lda_under, test_lda)$class
+eval_under_test <- eval_measures(test_lda$y, pred_test_under)
+eval_under_test
+```
+
+### Comment
+
+To balance the classes, we took the same number of “no” and “yes” samples 
+from the training data. Since “yes” is the smaller group, we had to throw away 
+most of the “no” cases and kept only 348 from each class. This makes the 
+training set perfectly balanced, but much smaller than before.
+
+After training LDA on this reduced dataset, the model finally started paying 
+attention to the “yes” class. The sensitivity increased a lot, both on the 
+training and on the test set. This means the model is catching many more 
+positive cases than the original LDA.
+
+The downside is that specificity dropped compared to the earlier model, 
+because we removed most of the “no” cases and the classifier has less 
+information about them. Still, the balanced accuracy is clearly higher than 
+before, which shows that the classifier handles the two classes more evenly.
+
+## 2(b) Oversampling
+
+```{r}
+set.seed(12321492)
+
+# Class sizes in the original training set
+n_no  <- sum(train$y == "no")
+n_yes <- sum(train$y == "yes")
+
+max_n <- max(n_no, n_yes)
+
+# Separate majority and minority classes
+train_no  <- train %>% filter(y == "no")
+train_yes <- train %>% filter(y == "yes")
+
+# Oversample: keep max_n from each class
+# - majority class: sample without replacement (essentially keep almost everything)
+# - minority class: sample with replacement to reach max_n
+over_no  <- train_no  %>% slice_sample(n = max_n, replace = FALSE)
+over_yes <- train_yes %>% slice_sample(n = max_n, replace = TRUE)
+
+# Combine into oversampled training set
+oversampled <- bind_rows(over_no, over_yes)
+
+# Check new class balance
+table(oversampled$y)
+
+# Convert character variables to factors
+oversampled_lda <- oversampled %>%
+  mutate(across(where(is.character), factor))
+
+# Fit LDA on the oversampled training set
+lda_over <- lda(y ~ ., data = oversampled_lda)
+
+# Evaluation on oversampled TRAIN set
+pred_train_over <- predict(lda_over, oversampled_lda)$class
+eval_over_train <- eval_measures(oversampled_lda$y, pred_train_over)
+eval_over_train
+
+# Evaluation on the unchanged TEST set
+test_lda <- test %>%
+  mutate(across(where(is.character), factor))
+
+pred_test_over <- predict(lda_over, test_lda)$class
+eval_over_test <- eval_measures(test_lda$y, pred_test_over)
+eval_over_test
+
+```
+
+
+### Comment
+For oversampling we simply duplicated the minority class “yes” until it had the 
+same size as the “no” class.  
+So nothing was removed; we only added repeated examples of the smaller group to make the training set balanced.
+
+The model trained on this oversampled data learns to notice the “yes” class much 
+better.  
+On the training set both sensitivity and specificity are quite high, and 
+the balanced accuracy is strong.
+
+On the test set the results stay stable: the model still does a much better job 
+detecting “yes” compared to the original LDA, and its specificity remains good.  
+
+The balanced accuracy on the test set is clearly better than before.
+
+Overall, oversampling helps the classifier pay attention to both classes without 
+throwing away useful data. The performance is more even and the model handles the 
+minority class more reliably than the original version.
+
+## Which strategy is more successful
+
+Both undersampling and oversampling improve the model compared to training on the
+original imbalanced data, because the classifier finally sees both classes in a
+more equal way.  
+However, oversampling is the more successful strategy here.
+
+With undersampling we had to throw away most of the "no" cases, which makes the
+training set much smaller.  
+The model becomes more sensitive to the "yes" class,
+but it loses information about the majority group and becomes less stable.
+
+Oversampling keeps all original data and only repeats the minority class.  
+This leads to a more balanced model without reducing the size of the training set.  
+The test balanced accuracy with oversampling is slightly higher, and the overall
+performance is more stable.
+
+# Ex-3 Quadratic Discrimant Analysis (QDA)
+
+## QDA with Undersampling
+
+```{r}
+set.seed(12321492)
+
+# class counts
+n_no  <- sum(train$y == "no")
+n_yes <- sum(train$y == "yes")
+min_n <- min(n_no, n_yes)
+
+# undersample each class
+under_qda_train <- train %>%
+  group_by(y) %>%
+  slice_sample(n = min_n) %>%
+  ungroup() %>%
+  mutate(across(where(is.character), factor))
+
+# fit QDA
+qda_under <- qda(y ~ ., data = under_qda_train)
+
+# test set (same as before)
+test_qda <- test %>%
+  mutate(across(where(is.character), factor))
+
+# predictions on test set
+pred_qda_under <- predict(qda_under, test_qda)$class
+
+# evaluation
+eval_qda_under <- eval_measures(test_qda$y, pred_qda_under)
+eval_qda_under
+```
+
+## QDA with Oversampling
+
+```{r}
+set.seed(12321492)
+
+n_no  <- sum(train$y == "no")
+n_yes <- sum(train$y == "yes")
+max_n <- max(n_no, n_yes)
+
+train_no  <- train %>% filter(y == "no")
+train_yes <- train %>% filter(y == "yes")
+
+# oversample: minority with replacement
+over_no  <- train_no  %>% slice_sample(n = max_n, replace = FALSE)
+over_yes <- train_yes %>% slice_sample(n = max_n, replace = TRUE)
+
+over_qda_train <- bind_rows(over_no, over_yes) %>%
+  mutate(across(where(is.character), factor))
+
+# fit QDA
+qda_over <- qda(y ~ ., data = over_qda_train)
+
+# predict on test
+pred_qda_over <- predict(qda_over, test_qda)$class
+
+# evaluation
+eval_qda_over <- eval_measures(test_qda$y, pred_qda_over)
+eval_qda_over
+```
+
+## Comment
+
+With undersampling, QDA gets a big improvement in sensitivity compared to the 
+original model, but the specificity drops. The balanced accuracy on the test set 
+(about 0.70) is decent, but the model is clearly unstable because we removed most 
+of the data.
+
+With oversampling, QDA keeps all original “no” cases and only repeats the “yes” 
+samples. Sensitivity becomes slightly lower than in undersampling, but specificity 
+becomes higher. The final balanced accuracy on the test set (about 0.69) is almost 
+the same as with undersampling.
+
+Overall, both approaches help QDA handle the minority class better than the 
+original version. Undersampling gives higher sensitivity, oversampling gives 
+higher specificity, and the balanced accuracy ends up very similar. Neither method 
+is clearly superior here, and QDA does not benefit as strongly from balancing as 
+LDA did.
+
+# Ex-4 Regularized Discrimant Analysis (RDA)
+
+## RDA with undersampling
+
+```{r}
+set.seed(12321492)
+
+# Prepare undersampled training set
+n_no  <- sum(train$y == "no")
+n_yes <- sum(train$y == "yes")
+min_n <- min(n_no, n_yes)
+
+under_rda_train <- train %>%
+  group_by(y) %>%
+  slice_sample(n = min_n) %>%
+  ungroup() %>%
+  mutate(across(where(is.character), factor))
+
+# Fit RDA
+rda_under <- rda(y ~ ., data = under_rda_train)
+
+# Predict on unchanged test set
+test_rda <- test %>%
+  mutate(across(where(is.character), factor))
+
+pred_rda_under <- predict(rda_under, test_rda)$class
+
+# Evaluation
+eval_rda_under <- eval_measures(test_rda$y, pred_rda_under)
+eval_rda_under
+
+# Show chosen tuning parameters
+rda_under$regularization
+```
+
+## RDA with oversampling
+
+```{r}
+set.seed(12321492)
+
+# Prepare oversampled training set
+n_no  <- sum(train$y == "no")
+n_yes <- sum(train$y == "yes")
+max_n <- max(n_no, n_yes)
+
+train_no  <- train %>% filter(y == "no")
+train_yes <- train %>% filter(y == "yes")
+
+over_no  <- train_no  %>% slice_sample(n = max_n, replace = FALSE)
+over_yes <- train_yes %>% slice_sample(n = max_n, replace = TRUE)
+
+over_rda_train <- bind_rows(over_no, over_yes) %>%
+  mutate(across(where(is.character), factor))
+
+# Fit RDA
+rda_over <- rda(y ~ ., data = over_rda_train)
+
+# Predict on test set
+pred_rda_over <- predict(rda_over, test_rda)$class
+
+# Evaluation
+eval_rda_over <- eval_measures(test_rda$y, pred_rda_over)
+eval_rda_over
+
+# Show tuning parameters
+rda_over$regularization
+```
+
+## Comment
+
+After undersampling, RDA performs poorly on the test set. Sensitivity is almost 1, 
+but specificity is near zero, so the model predicts nearly everyone as “yes”. 
+Balanced accuracy is about 0.50, which is basically useless.
+
+The tuning parameters (gamma 0.75, lambda 0.56) show that the model applies 
+moderate shrinkage and sits between QDA and LDA. With such a small undersampled 
+training set, this regularization pushes the classifier into an overly simple 
+decision boundary, causing the collapse toward predicting “yes” for almost all cases.
+
+
+Oversampling gives a much better result: sensitivity .77, specificity 0.69, 
+and balanced accuracy 0.73. The model becomes far more balanced and does not 
+collapse into predicting a single class.
+
+The tuning parameters (gamma 1, lambda 0.95) indicate very strong 
+regularization: the covariance structure is almost pooled and almost diagonal. 
+With the larger oversampled training set, this heavy regularization produces a 
+stable classifier that handles both classes more reliably.
+
+
+Oversampling is clearly better than undersampling for RDA here. It keeps all the 
+majority-class information, provides enough data for the minority class, and leads 
+to a stable model with much higher balanced accuracy.

@@ -1,0 +1,318 @@
+---
+title: "Exercise 9 (2025) — Advanced Methods for Regression and Classification"
+author: "Olesia Galynskaia 12321492"
+date: "`r format(Sys.Date())`"
+output: pdf_document
+fontsize: 11pt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+set.seed(12321492)
+options(repos = c(CRAN = "https://cran.wu.ac.at"))
+#install.packages("tidyverse")
+#install.packages("ISLR2")
+library(glmnet)
+library(ggplot2)
+library(MASS)
+library(klaR)
+library(tidyverse)
+library(splines)
+library(ISLR2)
+```
+
+# Loading and observing data (copied from last week exercise)
+```{r}
+str(cars)
+summary(cars)
+cor(cars$speed, cars$dist)
+
+plot(dist ~ speed, data = cars,
+     main = "cars: stopping distance vs speed",
+     xlab = "Speed",
+     ylab = "Stopping distance")
+```
+
+## Comment (copied from last week exercise)
+The plot shows a clear upward trend: higher speed comes with longer stopping distance.  
+The correlation is about 0.81, so the relationship is strong.  
+The spread gets wider at higher speeds, but the overall pattern stays the same.
+
+# Ex-1 B-spline basis with bs()
+```{r}
+speed <- cars$speed
+dist  <- cars$dist
+
+dfs <- 3:7
+results <- list()
+
+par(mfrow = c(2, 3))
+
+for (d in dfs) {
+  # Fit B-spline model
+  bs_obj <- bs(cars$speed, df = d)
+  lm_bs  <- lm(cars$dist ~ bs_obj)
+  
+  # Save summary
+  results[[as.character(d)]] <- summary(lm_bs)
+  
+  # Predict on fine grid
+  speed_new <- seq(0, 30, length.out = 200)
+  bs_new <- predict(bs_obj, newx = speed_new)
+  pred <- cbind(1, bs_new) %*% coef(lm_bs)
+  
+  # Plot
+  plot(cars$speed, cars$dist,
+       main = paste("df =", d),
+       xlim = c(0, 30),
+       ylim = c(0, max(cars$dist) * 1.1),
+       xlab = "Speed", ylab = "Distance")
+  lines(speed_new, pred, col = 2, lwd = 2)
+}
+
+par(mfrow = c(1, 1))
+
+results
+```
+
+
+I compared df = 3-7 and chose df = 5 because it captures the non-linear trend without introducing unnecessary wiggles.  
+Higher df only give tiny gains in $R^2$ but make the curve more irregular.
+
+```{r}
+# Original data
+speed <- cars$speed
+dist  <- cars$dist
+
+# Add artificial observation at (0, 0) to reflect the physical constraint
+speed_aug <- c(0, speed)
+dist_aug  <- c(0, dist)
+
+# Higher weight for the artificial point to pull the curve towards (0, 0)
+w_aug <- c(20, rep(1, length(dist)))
+
+# Degrees of freedom chosen after comparing df = 3–7
+df_bs <- 5
+
+# Construct B-spline basis for speed (only on the observed range with added 0)
+bs_obj <- bs(speed_aug, df = df_bs)
+
+# Fit a weighted linear model using the B-spline basis
+lm_bs <- lm(dist_aug ~ bs_obj, weights = w_aug)
+
+summary(lm_bs)
+```
+
+## Comment
+
+I construct a B-spline basis for speed and fit a linear model with df = 5.  
+After comparing df = 3-7, df = 5 gives a plausible fit: it captures the curvature without introducing unnecessary wiggles.  
+I also include an artificial observation at (0, 0) with a high weight to reflect the physical constraint that the stopping distance should be zero at zero speed.  
+
+Most coefficients for the spline basis are statistically significant, and the model explains a large part of the variability in the data ($R^2$ 0.83).  
+This is a clear improvement over models with fewer degrees of freedom and indicates that the chosen spline is flexible enough to follow the trend but still smooth.  
+The residual standard error stays around 15, which is comparable to the unweighted fits, meaning that adding (0, 0) does not distort the behaviour on the observed data.
+
+# Ex-2 Construct B-splines on [0, 30] and predict
+
+```{r}
+# New speed grid for the extended range
+speed_new <- seq(0, 30, length.out = 200)
+
+# Build B-spline basis for the new speeds using the SAME basis as in Task (1)
+bs_new <- predict(bs_obj, newx = speed_new)
+
+# Add intercept column
+X_new <- cbind(1, bs_new)
+
+# Predicted stopping distances on the extended range
+bs_pred <- as.vector(X_new %*% coef(lm_bs))
+
+# Quick diagnostic checks
+min(bs_pred)      # should not be negative after adding (0,0)
+bs_pred[1]        # predicted distance at speed = 0
+```
+
+## Comment
+
+I construct the B-spline basis for the extended range [0,30] using the same knots as in Task 1, and then apply the fitted linear model to obtain predictions for the new domain.  
+When extending the range beyond the observed data, R gives a warning about boundary knots, but this does not affect the results.  
+
+The predicted values behave well near zero: the model returns approximately 0.04 at speed = 0, which is very close to the expected physical value of zero.  
+All predictions on [0,30] remain non-negative, which was one of the requirements.  
+This is a consequence of adding the artificial point (0,0) with a high weight in Task 1, which ensures that the fitted curve stays near the origin.
+
+# Ex-3 Plot the data and the prediction from (2)
+
+```{r}
+# Plot the observed data
+plot(dist ~ speed, data = cars,
+     xlim = c(0, 30),                           # extend x-range to [0, 30]
+     ylim = c(0, max(c(cars$dist, bs_pred)) * 1.1),  # leave some space on top
+     main = "cars data with B-spline prediction",
+     xlab = "Speed",
+     ylab = "Stopping distance")
+
+# Add the predicted curve from Task (2)
+lines(speed_new, bs_pred, lwd = 2)
+
+# Show the physical reference: zero line and the point (0, 0)
+abline(h = 0, lty = 2)
+points(0, 0, pch = 16, col = "red")
+```
+
+## Comment
+
+The plot shows the observed data together with the B-spline prediction extended to the interval [0,30].  
+The fitted curve follows the pattern of the data well within the observed range. Because the model was anchored at (0,0), the prediction at speed = 0 is close to zero, and the curve does not produce negative distances.  
+
+Outside the range of the observed speeds, especially above 25, the curve rises very steeply.  
+This behaviour is expected, because splines are not reliable for extrapolation, and the model has no data to constrain the shape in that region.  
+However, this does not affect the validity of the prediction on the observed domain.
+
+# Ex-4 natural splines (ns())
+
+## 1. Fit natural spline with df = 5 and (0,0) point
+```{r}
+speed_aug <- c(0, cars$speed)
+dist_aug  <- c(0, cars$dist)
+w_aug     <- c(20, rep(1, nrow(cars)))
+
+# Chosen df = 5 (same reasoning as in Task 1)
+df_ns <- 5
+
+# Natural spline basis
+ns_obj <- ns(speed_aug, df = df_ns)
+
+# Weighted linear model
+lm_ns <- lm(dist_aug ~ ns_obj, weights = w_aug)
+
+summary(lm_ns)
+```
+
+## 2. Predict on [0, 30] using natural spline
+```{r}
+# Prediction grid
+speed_new <- seq(0, 30, length.out = 200)
+
+# Natural spline basis for new values
+ns_new <- predict(ns_obj, newx = speed_new)
+
+# Add intercept column
+X_new_ns <- cbind(1, ns_new)
+
+# Predictions
+ns_pred <- as.vector(X_new_ns %*% coef(lm_ns))
+
+# Quick check
+min(ns_pred)
+ns_pred[1]    # predicted distance at speed = 0
+```
+
+## 3. Plot data + natural spline prediction
+```{r}
+plot(dist ~ speed, data = cars,
+     xlim = c(0, 30),
+     ylim = c(0, max(c(cars$dist, ns_pred)) * 1.1),
+     main = "cars data with natural spline prediction",
+     xlab = "Speed",
+     ylab = "Stopping distance")
+
+lines(speed_new, ns_pred, lwd = 2)
+
+abline(h = 0, lty = 2)
+points(0, 0, pch = 16, col = "red")
+```
+
+## Comment
+
+I fit a natural spline with 5 degrees of freedom and included the artificial point (0,0) with a high weight.  
+This forces the fitted curve to stay close to zero at speed = 0, which matches the physical requirement that the stopping distance should be zero when the vehicle is not moving.  
+The model fits the data well, with all spline components highly significant and an $R^2$ around 0.83, which indicates a good amount of explained variability.
+
+When extending the spline to the range [0,30], the predicted values remain non-negative, and the prediction at speed = 0 is very close to zero.  
+Both requirements from the exercise are therefore satisfied.  
+The plotted curve follows the data smoothly in the observed range and shows a reasonable increasing trend.  
+As expected for a natural spline, the function becomes linear near the boundary, so the extrapolation beyond the observed speeds is more stable than with the B-spline in task 1.
+
+# Ex-5 Smoothing splines as implemented in smooth.spline()
+
+```{r}
+# Fit smoothing spline using internal cross-validation
+ss_fit <- smooth.spline(cars$speed, cars$dist, cv = TRUE)
+
+# Print the object and the effective degrees of freedom
+ss_fit
+ss_fit$df
+```
+
+## Comment
+
+I fit a smoothing spline using smooth.spline() with internal cross-validation.
+The procedure selected a very strong amount of smoothing, resulting in an effective degrees of freedom of about 2.0.
+This means the spline behaves almost like a simple curve with only minimal flexibility.
+Cross-validation prefers this level of smoothness because the cars dataset is noisy, and a more flexible spline would start to overfit.
+
+# Ex-6
+
+```{r}
+# Grid for extended range [0, 30]
+speed_new <- seq(0, 30, length.out = 200)
+
+# Predictions from the smoothing spline of Task (5)
+ss_pred <- predict(ss_fit, x = speed_new)
+
+# Plot data + original smoothing spline prediction
+plot(dist ~ speed, data = cars,
+     xlim = c(0, 30),
+     ylim = c(min(0, ss_pred$y) * 1.1, max(c(cars$dist, ss_pred$y)) * 1.1),
+     main = "Smoothing spline prediction on [0, 30]",
+     xlab = "Speed",
+     ylab = "Stopping distance")
+
+lines(ss_pred$x, ss_pred$y, lwd = 2)
+abline(h = 0, lty = 2)
+points(0, 0, pch = 16, col = "red")
+
+# Check behaviour near zero
+min(ss_pred$y)
+ss_pred$y[1]
+
+# Add an artificial observation at (0, 0) with a high weight
+speed_aug <- c(0, cars$speed)
+dist_aug  <- c(0, cars$dist)
+w_aug     <- c(20, rep(1, length(cars$dist)))  # strong weight on (0,0)
+
+# Refit smoothing spline with the extra point
+ss_fit_constr <- smooth.spline(speed_aug, dist_aug, w = w_aug, cv = TRUE)
+
+# Predict again on [0, 30]
+ss_pred_constr <- predict(ss_fit_constr, x = speed_new)
+
+# Plot constrained version
+plot(dist ~ speed, data = cars,
+     xlim = c(0, 30),
+     ylim = c(0, max(c(cars$dist, ss_pred_constr$y)) * 1.1),
+     main = "Smoothing spline anchored at (0, 0)",
+     xlab = "Speed",
+     ylab = "Stopping distance")
+
+lines(ss_pred_constr$x, ss_pred_constr$y, lwd = 2)
+abline(h = 0, lty = 2)
+points(0, 0, pch = 16, col = "red")
+
+min(ss_pred_constr$y)
+ss_pred_constr$y[1]
+```
+
+
+## Comment
+
+Using the smoothing spline from task 5, I predicted the stopping distance on the extended range [0,30].  
+The original spline is very smooth and almost linear, and its prediction near speed 0 is negative (around -17).  
+This violates the requirement that the stopping distance should be zero when the speed is zero and should not become negative.  
+
+To address this, I refit the spline after adding an artificial observation at (0,0) with a high weight.  
+This forces the fitted curve to stay close to the origin and removes the strong negative dip.  
+The modified prediction now passes essentially through (0,0), and the smallest predicted value is only slightly below zero (about -0.05), which is negligible.
+The overall shape of the curve remains smooth and follows the data well, while satisfying the intended physical constraints.

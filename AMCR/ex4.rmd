@@ -1,0 +1,323 @@
+---
+title: "Exercise 4 (2025) — Advanced Methods for Regression and Classification"
+author: "Olesia Galynskaia 12321492"
+date: "`r format(Sys.Date())`"
+output: pdf_document
+fontsize: 11pt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+set.seed(12321492)
+options(repos = c(CRAN = "https://cran.wu.ac.at"))
+```
+
+# Loading and observing data
+```{r}
+load("building.RData")   
+stopifnot(exists("df"), is.data.frame(df))
+attributes(df)
+
+str(attributes(df))
+
+
+head(sapply(df, function(x) attr(x, "label")), 100)
+
+```
+
+# Ex-1
+## Train/test split
+```{r}
+df <- df[order(1:nrow(df)), ]   # already in time order, this is a no-op
+
+n <- nrow(df)
+cut <- floor(0.8 * n)
+
+train <- df[1:cut, ]
+test  <- df[(cut+1):n, ]
+```
+
+## Comment
+If we split the data randomly, we would mix future observations into the training set.  
+That would give the model information about the future that it would not have in reality.  
+In other words, the model would “cheat” and we would get over-optimistic results.  
+
+To avoid this leakage, we use a time-based split:  
+
+the earlier 80% of the observations are used for training  
+
+the last 20% are used as the test set  
+
+This way, the model only learns from the past and we evaluate it on the future, which matches the real-world forecasting scenario.  
+
+# Ex-2
+## (a) PLS with 10-fold CV, time-aware segments
+
+```{r}
+library(pls)
+
+set.seed(12321492)  # reproducibility for CV folds
+
+# 1) Keep only numeric variables; y must be numeric
+is_num <- vapply(train, is.numeric, logical(1))
+stopifnot("y" %in% names(train), is_num["y"])
+train_num <- train[, is_num, drop = FALSE]
+
+# 2) Drop zero-variance columns (defensive)
+nzv <- vapply(train_num, function(x) sd(x, na.rm = TRUE) > 0, logical(1))
+train_num <- train_num[, nzv, drop = FALSE]
+
+# 3) Fit PLS with consecutive segments to respect time
+pls_fit <- plsr(
+  y ~ .,
+  data         = train_num,
+  scale        = TRUE,
+  validation   = "CV",
+  segments     = 10,
+  segment.type = "consecutive"
+)
+
+# 4) CV diagnostics
+summary(pls_fit)
+
+cv_res <- RMSEP(pls_fit)    # CV errors for all components (incl. intercept)
+cv_mat <- cv_res$val        # 3D array: [metric, response, component]
+
+# Robust extraction: use indices, not names (names may differ or be NULL)
+#  - 1st dim index 1 = "CV" RMSE
+#  - 2nd dim index 1 = first/only response
+#  - 3rd dim = components (slot 1 is intercept-only)
+rmse_all  <- drop(cv_mat[1, 1, ])     # includes intercept
+rmse_vals <- rmse_all[-1]             # drop intercept-only
+ncomp_seq <- seq_along(rmse_vals)
+
+# Choose optimal number of components by min CV-RMSE
+opt_ncomp <- which.min(rmse_vals)
+cat("Optimal ncomp by min CV-RMSE:", opt_ncomp, "\n")
+```
+
+## (b) Plotting and choosing numbers of components
+```{r}
+validationplot(pls_fit, val.type = "RMSEP")  # full CV-RMSE curve
+validationplot(pls_fit, val.type = "R2")     # CV-R^2 curve
+
+# Zoom into first 15 components for readability
+upper <- min(15, length(rmse_vals))
+plot(ncomp_seq[1:upper], rmse_vals[1:upper], type = "b", pch = 19,
+     xlab = "Number of components", ylab = "CV RMSE",
+     main = "Zoomed CV-RMSE (first components)")
+abline(v = opt_ncomp, col = "red", lwd = 2, lty = 2)
+points(opt_ncomp, rmse_vals[opt_ncomp], col = "red", pch = 19, cex = 1.4)
+text(opt_ncomp, rmse_vals[opt_ncomp], paste0("opt = ", opt_ncomp),
+     pos = 4, col = "red")
+```
+
+### Comment
+The cross-validated RMSE decreases rapidly as we add the first few components and reaches its minimum at 6 components.  
+Beyond this point, the error starts to increase again, indicating the beginning of overfitting.  
+
+Therefore, the optimal number of PLS components is 6.
+
+## (c) Predplot
+```{r}
+predplot(pls_fit, ncomp = opt_ncomp)
+```
+
+### Comment
+The predplot() shows the cross-validated predicted values versus the measured values using 6 components.  
+
+Most points lie close to the diagonal, indicating that the model captures the main structure in the data.  
+There is some scatter, especially at extreme values, but overall the cross-validated fit looks reasonable.
+
+## (d) Predicted versus observed values
+```{r}
+# Prepare test numeric data
+test_num <- test[, is_num, drop = FALSE]
+
+# Predict
+y_pred <- predict(pls_fit, newdata = test_num, ncomp = opt_ncomp)
+y_true <- test_num$y
+
+# RMSE
+rmse <- sqrt(mean((y_true - y_pred)^2))
+rmse
+
+plot(y_true, y_pred,
+     xlab = "Observed y",
+     ylab = "Predicted y",
+     pch = 19,
+     main = "PLS: Test Observed vs Predicted")
+abline(0, 1, col = "red", lwd = 2)
+```
+
+### Comment
+The PLS model achieves a test RMSE of approximately 0.36, which is higher than the RMSE obtained in the previous exercise (about 0.25). 
+ This indicates that, for this dataset, PLS does not outperform the simpler linear model.  
+ A likely reason is that the dataset already has a structured set of lagged predictors and does not suffer heavily from multicollinearity issues, so the advantage of PLS is limited in this case. 
+
+The test scatter plot confirms that PLS predictions generally follow the observed values but exhibit more deviation from the diagonal compared to the previous model.
+
+# Ex-3
+## (a) Ridge Regression
+```{r}
+library(glmnet)
+
+# prepare X and y matrices for glmnet
+X_train <- as.matrix(train_num[, setdiff(names(train_num), "y")])
+y_train <- train_num$y
+
+# Fit ridge regression (alpha = 0)
+ridge_fit <- glmnet(
+  X_train, y_train,
+  alpha = 0,            # ridge penalty
+  standardize = TRUE    # glmnet scales by default
+)
+
+# plot the coefficient paths vs lambda
+plot(ridge_fit, xvar = "lambda", label = TRUE,
+     main = "Ridge Regression Coefficient Paths")
+```
+
+### Comment
+
+**- What does the plot show?**
+
+It shows the coefficient paths for ridge regression as the penalty parameter lambda varies.  
+For large lambda, the coefficients are shrunk strongly towards zero.  
+As lambda decreases, the coefficients gradually increase in magnitude, approaching the ordinary least squares solution.
+
+**- Which default parameters are used for lambda?**
+
+glmnet() uses a default logarithmic grid of lambda values (around 100 values), automatically chosen based on data scale.  
+It starts from a lambda large enough to shrink all coefficients almost to zero and decreases to a small value near the unregularized model.
+
+**- What is the meaning of alpha?**
+
+alpha = 0 means ridge regression (L2 penalty).
+Values:
+
+alpha = 0 → Ridge (L2)
+
+alpha = 1 → LASSO (L1)
+
+0 < alpha < 1 → Elastic Net
+
+Ridge shrinks coefficients but does not set them exactly to zero.
+
+## (b) Ridge Regression
+
+```{r}
+X_train <- as.matrix(train_num[, setdiff(names(train_num), "y")])
+y_train <- train_num$y
+
+K <- 10
+n_tr <- nrow(X_train)
+fold_sizes <- rep(floor(n_tr / K), K)
+fold_sizes[1:(n_tr %% K)] <- fold_sizes[1:(n_tr %% K)] + 1
+foldid <- inverse.rle(list(lengths = fold_sizes, values = seq_len(K)))
+
+# CV ridge (alpha=0)
+set.seed(12321492)
+cv_ridge <- cv.glmnet(
+  X_train, y_train,
+  alpha = 0,                 # ridge
+  standardize = TRUE,        # glmnet scales by default
+  nfolds = K,                # will be overridden by foldid, but keep for clarity
+  foldid = foldid,           # consecutive blocks, no time leakage
+  type.measure = "mse",      # for Gaussian -> MSE; we'll sqrt later for RMSE
+  family = "gaussian"
+)
+
+# Plot CV curve
+plot(cv_ridge)
+title("Ridge CV — MSE vs log(lambda) (10 consecutive folds)", line = 2.5)
+
+# Pick lambdas and RMSEs
+lam_min <- cv_ridge$lambda.min      # minimizes mean CV error
+lam_1se <- cv_ridge$lambda.1se      # 1-SE rule (simpler model)
+
+mse_min <- min(cv_ridge$cvm)        # mean CV MSE at lambda.min
+rmse_min <- sqrt(mse_min)
+
+# Also compute RMSE at lambda.1se for reporting
+mse_1se <- cv_ridge$cvm[which(cv_ridge$lambda == lam_1se)]
+rmse_1se <- sqrt(mse_1se)
+
+cat(sprintf("lambda.min = %.5g; CV RMSE (min) = %.4f\n", lam_min, rmse_min))
+cat(sprintf("lambda.1se = %.5g; CV RMSE (1SE) = %.4f\n", lam_1se, rmse_1se))
+
+# Coefficients at lambda.min (optional preview)
+coef_min <- coef(cv_ridge, s = "lambda.min")
+nnz <- sum(coef_min != 0)
+cat("Nonzero coefficients at lambda.min:", nnz, "\n")
+head(as.matrix(coef_min)[,1], 15)  
+```
+
+### Comment
+We fitted ridge regression with cv.glmnet using 10 consecutive folds to respect time order.  
+
+The CV curve decreases smoothly as lambda decreases and reaches its minimum at lambda_min 0.12, with CV RMSE 0.27.  
+
+As a more conservative choice, the 1-SE rule selects lambda_1se 0.33 with a slightly higher CV RMSE (0.28) and stronger shrinkage.  
+
+The corresponding ridge coefficients are obtained via coef(cv_ridge, s = "lambda.min") (or "lambda.1se"). Ridge shrinks magnitudes but does not set coefficients exactly to zero.
+
+
+## (c) Ridge — test predictions, plots, RMSE
+
+```{r ridge_c, message=FALSE, warning=FALSE}
+stopifnot(exists("cv_ridge"))
+
+# Ensure test has the same numeric columns as training (after our NZV drop)
+test_num <- test[, colnames(train_num), drop = FALSE]
+
+# Matrices for glmnet
+X_test <- as.matrix(test_num[, setdiff(colnames(test_num), "y")])
+y_true <- test_num$y
+
+# Predict with lambda.min and lambda.1se
+y_pred_min  <- drop(predict(cv_ridge, newx = X_test, s = "lambda.min"))
+y_pred_1se  <- drop(predict(cv_ridge, newx = X_test, s = "lambda.1se"))
+
+# RMSE helper
+rmse <- function(y, yp) sqrt(mean((y - yp)^2))
+
+rmse_min <- rmse(y_true, y_pred_min)
+rmse_1se <- rmse(y_true, y_pred_1se)
+
+cat(sprintf("Test RMSE (ridge, lambda.min):  %.4f\n", rmse_min))
+cat(sprintf("Test RMSE (ridge, lambda.1se):  %.4f\n", rmse_1se))
+
+# Plot: observed vs predicted (lambda.min)
+plot(y_true, y_pred_min,
+     xlab = "Observed y (test)",
+     ylab = "Predicted y (ridge, lambda.min)",
+     pch = 19, main = "Ridge — Predicted vs Observed (test)")
+abline(0, 1, col = "red", lwd = 2)
+
+# Second plot for 1SE
+plot(y_true, y_pred_1se,
+     xlab = "Observed y (test)",
+     ylab = "Predicted y (ridge, lambda.1se)",
+     pch = 19, main = "Ridge (1SE) — Predicted vs Observed (test)")
+abline(0, 1, col = "red", lwd = 2)
+```
+
+### Comment
+
+Using the optimal ridge model, we predicted the response on the test set and compared the results against the observed values.  
+The scatter plot shows a clear positive linear relationship, with most points lying close to the 45-degree line, indicating good predictive performance.
+
+The test RMSE for the model with lambda_min is approximately 0.33, and about 0.34 under the 1-SE rule.  
+Compared to the previous models, ridge performs better than PLS (0.36) but does not outperform the standard linear regression model from Exercise 3 (0.25).  
+
+This is consistent with the idea that ridge improves stability through coefficient shrinkage, 
+but may not produce the lowest error when multicollinearity is moderate and the baseline model already fits well.
+
+## (d)
+### Comment
+Even though ridge penalization shrinks the overall L2-norm of the coefficient vector as lambda increases, individual coefficients do not have to move strictly in one direction.  
+With correlated predictors, the coefficients influence each other, so some paths can bend slightly rather than decrease smoothly.   
+
+In addition, glmnet computes the solution path numerically, which can introduce small non-monotonic wiggles.  
+In other words, the total shrinkage is monotonic, but individual coefficient curves may show small reversals, and this is expected behavior rather than a problem.

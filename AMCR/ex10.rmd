@@ -1,0 +1,257 @@
+---
+title: "Exercise 10 (2025) — Advanced Methods for Regression and Classification"
+author: "Olesia Galynskaia 12321492"
+date: "`r format(Sys.Date())`"
+output: pdf_document
+fontsize: 11pt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+set.seed(12321492)
+options(repos = c(CRAN = "https://cran.wu.ac.at"))
+#install.packages("tidyverse")
+install.packages("ROCit")
+library(ROCit)
+```
+
+# Loading and observing data
+```{r}
+data("Diabetes")
+
+str(Diabetes)
+
+Diabetes$y <- ifelse(Diabetes$dtest == "+", 1, 0)
+table(Diabetes$y, useNA = "ifany")
+prop.table(table(Diabetes$y))
+
+taby <- table(Diabetes$y)
+
+barplot(
+  taby,
+  names.arg = c("No diabetes", "Diabetes"),
+  col = "lightgray",
+  ylab = "Count",
+  main = "Class distribution of the target variable"
+)
+```
+
+## Comment 
+Before fitting the models, I briefly explored the Diabetes dataset to understand its structure and the target variable.  
+The dataset contains 403 observations with clinical measurements such as cholesterol, stabilized glucose, HDL, BMI, age, and gender.  
+
+The original target variable dtest is a character variable indicating whether the diabetes test is positive or negative.  
+I converted it into a binary target y, where y = 1 represents a positive diabetes test and y = 0 a negative one. Missing values were kept as NA and handled later during model fitting.  
+
+The class distribution is imbalanced, with about 85% non-diabetic and 15% diabetic observations, as shown by the bar plot.  
+To avoid biased model evaluation, a stratified train/test split is used in the subsequent analysis.
+
+# Data preparation
+```{r}
+vars <- c("y", "chol", "stab.glu", "hdl", "bmi", "age", "gender")
+dat <- Diabetes[, vars]
+dat$gender <- factor(dat$gender)
+
+dat <- na.omit(dat)
+
+set.seed(12321492)
+
+idx0 <- which(dat$y == 0)
+idx1 <- which(dat$y == 1)
+
+train0 <- sample(idx0, size = floor(0.75 * length(idx0)))
+train1 <- sample(idx1, size = floor(0.75 * length(idx1)))
+
+train_id <- c(train0, train1)
+
+train <- dat[train_id, ]
+test  <- dat[-train_id, ]
+
+```
+
+## Comment
+I selected the predictor variables specified in the assignment and removed observations with missing values to ensure consistent model fitting.  
+Because the target classes are imbalanced, I created a stratified train/test split by randomly selecting about three quarters of the observations from each class for the training set.  
+This ensures that both classes are represented in the training and test data.
+
+# Ex-1 Logistic regression
+```{r}
+logit_fit <- glm(
+  y ~ chol + stab.glu + hdl + bmi + age + gender,
+  data = train,
+  family = "binomial"
+)
+
+summary(logit_fit)
+
+```
+
+```{r}
+prob_test <- predict(logit_fit, newdata = test, type = "response")
+pred_test <- ifelse(prob_test > 0.5, 1, 0)
+```
+
+```{r}
+cm <- table(
+  Actual = test$y,
+  Predicted = pred_test
+)
+
+cm
+
+miscl <- mean(pred_test != test$y)
+miscl
+```
+
+## Comment
+I fitted a logistic regression model using chol, stab.glu, hdl, bmi, age, and gender.  
+Stabilized glucose has a strong and highly significant positive effect on the probability of diabetes.  
+BMI and age are also significant, while cholesterol and HDL are not. Gender shows only a weak effect.
+
+Using a threshold of 0.5, the model classifies all non-diabetic cases correctly but misses some diabetic cases.  
+The overall misclassification rate is about 8.2%, showing good accuracy, but weaker performance for the minority diabetes class.
+
+# Ex-2
+
+## 2(a) Fit a GAM
+
+```{r}
+library(mgcv)
+
+gam_fit <- gam(
+  y ~ s(chol) + s(stab.glu) + s(hdl) + s(bmi) + s(age) + gender,
+  data = train,
+  family = "binomial",
+  method = "REML"
+)
+
+summary(gam_fit)
+```
+
+### Comment
+From the model output, the smooth term for stab.glu is clearly significant (p < 0.001) and has an effective degrees of freedom (edf) above 1, suggesting a non-linear relationship with diabetes risk.  
+The other smooth terms (chol, hdl, bmi, age) are not significant at the 5% level, although chol is borderline (p 0.08).  
+The parametric effect of gender is also not significant. Overall, the model explains about 70% of the deviance (deviance explained 69.8%).
+
+## 2(b) Significance and complexity of smooth terms
+
+### Comment
+
+In the GAM, the only clearly significant smooth term is s(stab.glu) (p < 0.001).  
+Its effective degrees of freedom (edf 2.85) indicate a moderately non-linear effect on the probability of diabetes.  
+
+The smooth terms s(chol), s(hdl), s(bmi), and s(age) are not statistically significant at the 5% level.  
+Among them, s(chol) is borderline significant (p 0.08), while the others show weaker evidence of an effect.  
+The effective degrees of freedom for these terms are close to or slightly above 1, suggesting mostly linear or only weakly non-linear relationships.  
+
+The parametric effect of gender is also not significant.  
+Overall, the model complexity is moderate, with only one predictor showing a clearly non-linear and important effect.
+
+## 2(c) Smoothed effects plots and interpretation
+
+```{r}
+par(mfrow = c(3, 2), mar = c(4, 4, 2, 1))
+
+for (i in 1:5) {
+  plot(gam_fit, select = i, shade = TRUE, shade.col = "yellow")
+}
+
+plot.new()
+
+par(mfrow = c(1, 1))
+```
+
+### Comment
+
+The plots show the estimated smooth effects of the predictors on the log-odds of diabetes, together with confidence bands.  
+
+The smooth effect of stab.glu shows a clear and strong increasing pattern.  
+As stabilized glucose increases, the probability of diabetes rises sharply, especially at higher values.  
+This confirms that glucose level is the most important predictor and that its effect is clearly non-linear.  
+
+For chol, the effect is weak and slightly curved, with wide confidence bands at the extremes.  
+This indicates uncertainty and explains why this variable is only borderline significant in the model.  
+
+The smooth for hdl is mostly flat, suggesting no strong association with diabetes across its range.  
+The effect of bmi shows a mild increasing trend, but the confidence bands overlap zero for most values, indicating a weak and uncertain effect.  
+For age, the smooth suggests a gradual increase in diabetes risk up to middle age, followed by a flattening at higher ages, but the overall effect remains modest.  
+
+Overall, the plots indicate that allowing for non-linearity mainly matters for stabilized glucose.  
+For the other variables, the effects are small and uncertain, which is consistent with their lack of statistical significance in the model summary.
+
+## 2(d) Confusion table, misclassification error, and comparison to (1)
+
+```{r}
+# Predict probabilities on the test set
+prob_test_gam <- predict(gam_fit, newdata = test, type = "response")
+
+# Convert probabilities to class labels
+pred_test_gam <- ifelse(prob_test_gam > 0.5, 1, 0)
+
+# Confusion table
+cm_gam <- table(
+  Actual = test$y,
+  Predicted = pred_test_gam
+)
+cm_gam
+
+# Misclassification error
+miscl_gam <- mean(pred_test_gam != test$y)
+miscl_gam
+```
+
+### Comment
+
+Using the GAM model, I predicted class membership for the test set and obtained the confusion table shown above.  
+The misclassification error of the GAM is about 10.3%, which is higher than the misclassification error of the logistic regression model from Exercise (1), which was about 8.2%.  
+
+This indicates that the GAM does not improve classification performance compared to the simpler logistic regression model.  
+Although the GAM captures non-linear effects, especially for stabilized glucose, this additional flexibility does not translate into better predictive accuracy on the test set.  
+As in Exercise (1), the model still misclassifies a noticeable fraction of diabetic cases.  
+
+Overall, in this application the GAM is mainly useful for understanding non-linear relationships rather than for improving classification accuracy.
+
+## 2(e) Controlling smoothness with k
+
+```{r}
+gam_fit_k <- gam(
+  y ~ s(chol, k = 5) +
+       s(stab.glu, k = 5) +
+       s(hdl, k = 5) +
+       s(bmi, k = 5) +
+       s(age, k = 5) +
+       gender,
+  data = train,
+  family = "binomial",
+  method = "REML"
+)
+
+summary(gam_fit_k)
+
+prob_test_gam_k <- predict(gam_fit_k, newdata = test, type = "response")
+pred_test_gam_k <- ifelse(prob_test_gam_k > 0.5, 1, 0)
+
+cm_gam_k <- table(
+  Actual = test$y,
+  Predicted = pred_test_gam_k
+)
+cm_gam_k
+
+miscl_gam_k <- mean(pred_test_gam_k != test$y)
+miscl_gam_k
+```
+
+### Comment
+
+To control the complexity of the smooth terms, I set k = 5 for all smooth functions.  
+This choice allows the model to capture moderate non-linear patterns while avoiding overly flexible curves.  
+Given the relatively small sample size, a small value of k is sufficient and helps reduce the risk of overfitting, while still allowing meaningful non-linear effects to be detected. 
+
+After applying this restriction to GAM, stab.glu remains the only clearly significant smooth term (p < 2e-16) with an effective degrees of freedom of about 2.66, indicating a stable non-linear effect.  
+The smooth terms for chol and age become borderline significant (p = 0.05 and p = 0.085), while hdl and bmi remain non-significant. The parametric effect of gender is still not significant.  
+The overall model fit remains almost unchanged, with about 69% deviance explained, very similar to the unrestricted GAM.  
+
+On the test set, the confusion table and the misclassification error (10.3%) are exactly the same as for the previous GAM and worse than for the logistic regression model from Exercise (1).  
+This shows that restricting the smoothness does not improve classification performance.
+
+Overall, limiting the complexity confirms that the main conclusions are stable: stabilized glucose is the dominant predictor, and additional flexibility or restriction of the smooth terms does not lead to better predictive accuracy in this case.

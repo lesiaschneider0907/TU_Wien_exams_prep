@@ -1,0 +1,523 @@
+---
+title: "Exercise 3 (2025) — Advanced Methods for Regression and Classification"
+author: "Olesia Galynskaia 12321492"
+date: "`r format(Sys.Date())`"
+output: pdf_document
+fontsize: 11pt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+set.seed(12321492)
+options(repos = c(CRAN = "https://cran.wu.ac.at"))
+```
+
+# Loading and observing data
+```{r}
+load("building.RData")   
+stopifnot(exists("df"), is.data.frame(df))
+attributes(df)
+
+str(attributes(df))
+
+
+head(sapply(df, function(x) attr(x, "label")), 10)
+
+```
+# Quick structure and summary
+```{r}
+cat("**Dimensions:**", nrow(df), "rows ×", ncol(df), "columns\n\n")
+str(df[, 1:10])
+summary(df)
+```
+
+# Plot of response variable
+```{r}
+hist(df$y, breaks = 40,
+     main = "Distribution of response variable y (log-transformed)",
+     xlab = "y", col = "skyblue", border = "white")
+```
+```{r}
+# compute correlations
+num_data <- df[, sapply(df, is.numeric)]
+cor_mat <- cor(num_data, use = "pairwise.complete.obs")
+
+# keep only pairs with |r| > 0.9
+high_corr <- which(abs(cor_mat) > 0.9 & abs(cor_mat) < 1, arr.ind = TRUE)
+corr_pairs <- unique(t(apply(high_corr, 1, sort)))
+
+cat("Highly correlated pairs (|r| > 0.9):\n")
+print(head(data.frame(
+  Var1 = rownames(cor_mat)[corr_pairs[,1]],
+  Var2 = colnames(cor_mat)[corr_pairs[,2]],
+  r = round(cor_mat[corr_pairs], 3)
+), 10))
+
+```
+
+# Data preparation
+```{r}
+# 1) Train/Test split (2/3 : 1/3) — clean and reproducible
+set.seed(12321492)  # for reproducibility
+stopifnot(exists("df"), is.data.frame(df), "y" %in% names(df))
+
+n <- nrow(df)
+idx_train <- sample(seq_len(n), size = floor(2/3 * n))
+
+train <- df[idx_train, , drop = FALSE]
+test  <- df[-idx_train, , drop = FALSE]
+
+# function for RMSE
+rmse <- function(actual, predicted) sqrt(mean((actual - predicted)^2))
+
+# short info output
+cat("Train:", nrow(train), "rows | Test:", nrow(test), "rows\n")
+```
+
+# Ex-1
+
+## (1a) Fit PCR on the training set with 10-fold CV and scaling
+
+```{r}
+# Packages
+library(pls)  # pcr(), RMSEP(), predplot(), validationplot()
+
+# Predictors = all columns except y
+predictors <- setdiff(names(train), "y")
+
+# Fit PCR with 10-fold cross-validation and scaling
+set.seed(12321492)
+fit_pcr <- pcr(
+  y ~ .,
+  data       = train[, c("y", predictors)],
+  scale      = TRUE,
+  validation = "CV",
+  segments   = 10
+)
+
+# Model summary (number of comps, variance explained, etc.)
+summary(fit_pcr)
+```
+
+### Comment
+
+The summary of the PCR model shows that the cross-validated RMSEP drops quickly from about 0.86 (intercept only) to around 0.30 
+when using roughly 18-20 principal components. After that point, the error does not decrease further and even becomes extremely large 
+when too many components are included, which indicates overfitting and numerical instability.
+
+The “% variance explained” table shows that about 98 % of the variation in X and about 90 % of the variation in y are already captured with around 18 components. 
+This means that most relevant information is concentrated in the first few principal components, 
+and adding more components mainly adds noise rather than improving prediction.
+
+In summary, the PCR model performs well with around 20 components, 
+providing a good balance between model complexity and predictive accuracy.
+
+## (1b) Cross-validation errors and optimal number of components
+
+```{r}
+# Plot RMSEP vs number of components
+validationplot(fit_pcr, val.type = "RMSEP")
+
+# Extract CV RMSEP and find the optimal number of components
+rmsep_cv <- RMSEP(fit_pcr, estimate = "CV")
+best_ncomp <- which.min(rmsep_cv$val[1, 1, ]) - 1
+best_rmse_cv <- rmsep_cv$val[1, 1, best_ncomp + 1]
+
+cat("Optimal number of components:", best_ncomp, "\n")
+cat("Resulting RMSEP:", round(best_rmse_cv, 4), "\n")
+```
+
+### Comment
+
+The RMSEP plot shows that the cross-validated prediction error decreases steadily and reaches its minimum at around 40 components (RMSEP 0.29).   
+
+After about 70 components, the error increases sharply due to overfitting and numerical instability, which distorts the plot scale.   
+
+Although around 20 components already explain most of the data variance, cross-validation indicates that using up to 40 components gives the lowest prediction error.  
+
+## (1c) Observed vs. Cross-validated predicted values
+
+```{r}
+# Plot observed y vs cross-validated predicted y for the optimal number of components
+predplot(fit_pcr, ncomp = best_ncomp, estimate = "CV",
+          main = sprintf("Observed vs. CV-predicted values (ncomp = %d)", best_ncomp))
+```
+
+### Comment
+
+The scatter plot of observed versus cross-validated predicted values shows that most points lie close to the diagonal line, 
+indicating that the PCR model with 40 components fits the data well and produces accurate cross-validated predictions.  
+
+The relationship between measured and predicted y is almost linear, with only small deviations at the lower and higher ends of the range, 
+suggesting that the model captures the main trend effectively and generalizes well.  
+
+## (1d) Test set predictions and RMSE
+
+```{r}
+# Predict on the test set using the optimal number of components
+yhat_test_pcr <- as.numeric(predict(fit_pcr, newdata = test[, predictors], ncomp = best_ncomp))
+
+# Compute test RMSE
+rmse_test_pcr <- rmse(test$y, yhat_test_pcr)
+cat("Test RMSE (PCR):", round(rmse_test_pcr, 4), "\n")
+
+# Plot predicted vs observed values for the test data
+plot(test$y, yhat_test_pcr,
+     xlab = "Observed y (test)",
+     ylab = "Predicted y (test, PCR)",
+     main = sprintf("PCR Test Predictions (ncomp = %d)", best_ncomp))
+abline(0, 1, lty = 2)
+
+```
+
+### Comment
+
+The test RMSE of the PCR model (0.2436) is close to the best forward-selection model from the previous exercise (test RMSE 0.2301; CV RMSPE 0.22–0.26).  
+
+Although PCR is slightly less accurate, it achieves comparable generalization performance while effectively reducing multicollinearity among predictors.  
+
+This shows that both dimensionality reduction (PCR) and variable selection (forward stepwise) can improve model stability and predictive quality in similar ways.  
+
+## (1e) Visualizing scores and loadings
+
+```{r}
+
+# Extract score (Z) and loading (V) matrices
+Z <- scores(fit_pcr)
+V <- loadings(fit_pcr)
+
+# First two score vectors (Z1 vs Z2)
+plot(Z[, 1], Z[, 2],
+     xlab = "Score PC1", ylab = "Score PC2",
+     main = "PCR Scores: PC1 vs PC2",
+     pch = 19, col = "steelblue")
+grid()
+
+# First two loading vectors (V1 vs V2)
+plot(V[, 1], V[, 2],
+     xlab = "Loading PC1", ylab = "Loading PC2",
+     main = "PCR Loadings: PC1 vs PC2",
+     pch = 19)
+abline(h = 0, v = 0, lty = 3)
+text(V[, 1], V[, 2], labels = rownames(V), pos = 3, cex = 0.7, col = "darkred")
+```
+
+### Comment
+
+The PCR score plot (PC1 vs PC2) shows that the observations are not randomly scattered but follow an S-shaped structure along PC1, 
+suggesting a nonlinear underlying trend in the data. This pattern likely reflects temporal or economic effects, 
+as many predictors represent economic indicators and their lagged values.  
+
+In the loading plot, economic variables (EconX, EconX.lag1, EconX.lag2, etc.) are grouped closely together, 
+confirming strong correlations among them and indicating that the first principal component mainly captures the overall economic level across time. 
+The second component represents smaller, orthogonal variations, possibly related to physical-financial or calendar variables.  
+
+Overall, these plots illustrate the theoretical idea of PCR: the scores (Z = XV) represent the projection of observations into a low-dimensional space, 
+while the loadings (V) show which original variables form those new axes.   
+This visualization helps interpret how the main sources of variation are condensed into a few uncorrelated components used for regression.
+
+# Ex-2
+
+## (2a) Fit on train + plot()
+
+```{r}
+# Install + load
+if (!requireNamespace("L0Learn", quietly = TRUE)) install.packages("L0Learn")
+library(L0Learn)
+
+# Use your existing train/test
+X_train <- as.matrix(subset(train, select = -y))
+y_train <- train$y
+X_test  <- as.matrix(subset(test,  select = -y))
+y_test  <- test$y
+
+set.seed(12321492)
+
+# Cross-validated L0 (squared error loss, L0 + mild L2)
+cv_l0 <- L0Learn.cvfit(
+  x = X_train,
+  y = y_train,
+  loss = "SquaredError",
+  penalty = "L0L2",
+  nFolds = 10,
+  maxSuppSize = 60,
+  seed = 12321492
+)
+
+# CV plot
+plot(cv_l0)
+```
+
+### Comment
+
+The CV plot shows how the prediction error changes with the number of selected variables.   
+
+X-axis: Support Size — the number of non-zero coefficients (i.e., variables included in the model).  
+
+Y-axis: Cross-validation Error — the average prediction error from 10-fold cross-validation.  
+
+Points and error bars: the mean and standard error for each model configuration.  
+
+The error decreases sharply as the support size grows up to about 15–20 variables, indicating that adding informative predictors substantially improves model accuracy.  
+
+Beyond roughly 25–30 variables, the curve flattens and then slightly increases, suggesting overfitting.   
+
+The optimal model can therefore be chosen visually in the flat minimum region (around 18–20 variables), balancing accuracy and sparsity.  
+
+
+## (2b) Identify optimal lambda and non-zero coefficients
+
+```{r}
+# ===== Ex-2 (L0) — Manual 10-fold CV around L0Learn.fit (Windows-stable) =====
+if (!requireNamespace("L0Learn", quietly = TRUE)) install.packages("L0Learn")
+library(L0Learn)
+
+X_train <- as.matrix(subset(train, select = -y))
+y_train <- train$y
+X_test  <- as.matrix(subset(test,  select = -y))
+y_test  <- test$y
+
+set.seed(12321492)
+
+# 1) Fit once on full train to obtain a stable lambda path (pure L0 is safer on Windows)
+fit_full <- L0Learn.fit(
+  x = X_train, y = y_train,
+  loss = "SquaredError",
+  penalty = "L0",
+  maxSuppSize = 30,
+  nLambda = 40
+)
+
+# Build a global lambda grid (L0 requires a list of length 1)
+lambda_seq <- if (is.list(fit_full$lambda)) as.numeric(unlist(fit_full$lambda)) else as.numeric(fit_full$lambda)
+lambda_seq <- unique(lambda_seq[is.finite(lambda_seq) & lambda_seq > 0])
+lambda_seq <- sort(lambda_seq, decreasing = TRUE)
+stopifnot(length(lambda_seq) > 0)
+lambda_grid <- list(lambda_seq)  # <- correct format for L0
+
+# 2) Manual 10-fold CV using fold-specific available lambdas (aligned back to global grid)
+K <- 10
+n <- nrow(X_train)
+fold_id <- sample(rep(1:K, length.out = n))
+
+cv_sum <- rep(0, length(lambda_seq))  # accumulate MSE
+cv_cnt <- rep(0, length(lambda_seq))  # how many folds contributed at each lambda
+
+for (k in 1:K) {
+  idx_val <- which(fold_id == k)
+  idx_tr  <- setdiff(seq_len(n), idx_val)
+
+  X_tr <- X_train[idx_tr, , drop = FALSE]
+  y_tr <- y_train[idx_tr]
+  X_val <- X_train[idx_val, , drop = FALSE]
+  y_val <- y_train[idx_val]
+
+  # Train on this fold using the requested global grid (solver may return a subset)
+  fit_k <- L0Learn.fit(
+    x = X_tr, y = y_tr,
+    loss = "SquaredError",
+    penalty = "L0",
+    maxSuppSize = 30,
+    lambdaGrid = lambda_grid
+  )
+
+  # Lambdas actually available for this fold
+  lam_k <- if (is.list(fit_k$lambda)) as.numeric(unlist(fit_k$lambda)) else as.numeric(fit_k$lambda)
+  lam_k <- lam_k[is.finite(lam_k) & lam_k > 0]
+  if (!length(lam_k)) next
+
+  # Predictions for available lambdas → ensure a 2D matrix even if length(lam_k) == 1
+  pred_val <- predict(fit_k, newx = X_val, lambda = lam_k)
+  if (is.null(dim(pred_val))) {
+    pred_val <- matrix(pred_val, nrow = length(y_val), ncol = 1)
+  } else {
+    pred_val <- as.matrix(pred_val)
+  }
+
+  # Create matching "truth" matrix and compute MSE per lambda
+  y_mat <- matrix(y_val, nrow = length(y_val), ncol = ncol(pred_val))
+  mse_k <- colMeans((pred_val - y_mat)^2)
+
+  # Map these lambdas back to positions in the global grid
+  idx_in_global <- match(lam_k, lambda_seq)
+  keep <- which(!is.na(idx_in_global))
+  if (!length(keep)) next
+
+  cv_sum[idx_in_global[keep]] <- cv_sum[idx_in_global[keep]] + mse_k[keep]
+  cv_cnt[idx_in_global[keep]] <- cv_cnt[idx_in_global[keep]] + 1L
+}
+
+# Average CV MSE only where we have contributions
+valid <- which(cv_cnt > 0)
+stopifnot(length(valid) > 0)
+cv_mse <- rep(NA_real_, length(lambda_seq))
+cv_mse[valid] <- cv_sum[valid] / cv_cnt[valid]
+
+best_idx <- valid[which.min(cv_mse[valid])]
+best_lambda <- lambda_seq[best_idx]
+cat("Optimal lambda (manual CV):", format(best_lambda, digits = 8), "\n")
+
+# 3) Coefficients at lambda* (selected variables)
+coef_best <- as.matrix(coef(fit_full, lambda = best_lambda))  # [p+1 x 1], first row is (Intercept)
+rn <- rownames(coef_best)
+nz <- which(coef_best[, 1] != 0)
+nz <- nz[rn[nz] != "(Intercept)"]
+
+selected_df <- if (length(nz)) {
+  data.frame(variable = rn[nz], coefficient = coef_best[nz, 1], row.names = NULL)
+} else {
+  data.frame(variable = character(0), coefficient = numeric(0))
+}
+cat("Number of selected variables:", nrow(selected_df), "\n")
+if (nrow(selected_df)) print(selected_df)
+
+# 4) Fitted vs observed on training (2c)
+yhat_train_l0 <- as.numeric(predict(fit_full, newx = X_train, lambda = best_lambda))
+rmse_train_l0 <- sqrt(mean((y_train - yhat_train_l0)^2))
+cat("Train RMSE (L0):", round(rmse_train_l0, 4), "\n")
+
+plot(y_train, yhat_train_l0,
+     xlab = "Observed y (train)", ylab = "Fitted y (train, L0)",
+     main = "L0 (manual CV) — Fitted vs Observed (train)")
+abline(0, 1, lty = 2)
+
+# 5) Predicted vs observed on test (2d)
+yhat_test_l0 <- as.numeric(predict(fit_full, newx = X_test, lambda = best_lambda))
+rmse_test_l0 <- sqrt(mean((y_test - yhat_test_l0)^2))
+cat("Test RMSE (L0):", round(rmse_test_l0, 4), "\n")
+
+plot(y_test, yhat_test_l0,
+     xlab = "Observed y (test)", ylab = "Predicted y (test, L0)",
+     main = "L0 (manual CV) — Predicted vs Observed (test)")
+abline(0, 1, lty = 2)
+
+
+```
+
+### Comment
+
+In this part, we determine the best tuning parameter lambda, which controls how strongly the model penalizes non-zero coefficients.
+We performed a 10-fold cross-validation using the L0Learn package, which trains several models with different lambda values and measures their prediction error.
+
+The lambda that gives the lowest cross-validation error is selected as the optimal lambda.
+For this lambda, we extract the regression coefficients - that is, the estimated effects of each variable in the model.
+Most coefficients become exactly zero, because the L0 penalty forces the model to keep only the most relevant variables.
+
+The manual 10-fold cross-validation found an optimal lambda that produces a very sparse model - almost all coefficients are set to zero, leaving only the intercept.
+This means that at this level of penalization, adding predictors does not significantly reduce prediction error, so the model prefers simplicity over complexity.
+
+In other words, the optimal lambda strongly regularizes the model:  
+
+- smaller lambda would include more variables but risk overfitting,  
+
+- larger lambda would keep only the intercept.  
+
+Even though the selected model contains no active predictors, its predictive accuracy (RMSE) remains close to that of the PCR model,  
+indicating that the main structure of y is largely captured by the overall mean.
+
+## (2c) Train fitted vs observed and RMSE
+```{r}
+
+yhat_train_l0 <- as.numeric(predict(fit_full, newx = as.matrix(X_train), lambda = best_lambda))
+rmse_train_l0 <- sqrt(mean((y_train - yhat_train_l0)^2))
+cat("Train RMSE (L0): ", round(rmse_train_l0, 4), "\n", sep = "")
+
+plot(y_train, yhat_train_l0,
+     xlab = "Observed y (train)", ylab = "Fitted y (train, L0)",
+     main = "L0 — Fitted vs Observed (train)")
+abline(0, 1, lty = 2)
+```
+
+### Comment
+
+Here we check how well the model fits the training data.
+We compute the fitted values (the model’s predicted y on the training set) and compare them to the actual observed values.
+
+Then we calculate the Root Mean Squared Error (RMSE), which measures the average prediction error:
+
+The smaller the RMSE, the better the model fits.
+
+In my case, the training RMSE of the L0 model was about 0.27, which means that on average, the model’s predictions differ from the actual y by around 0.27 in log-scale units.
+This is only slightly higher than the PCR model (0.24), showing that L0 performs almost as well but with far fewer predictors.
+
+## (2d) Test predicted vs observed and RMSE
+
+```{r}
+## --- (2d) Test predicted vs observed and RMSE ---
+yhat_test_l0 <- as.numeric(predict(fit_full, newx = as.matrix(X_test), lambda = best_lambda))
+rmse_test_l0 <- sqrt(mean((y_test - yhat_test_l0)^2))
+cat("Test RMSE (L0): ", round(rmse_test_l0, 4), "\n", sep = "")
+
+plot(y_test, yhat_test_l0,
+     xlab = "Observed y (test)", ylab = "Predicted y (test, L0)",
+     main = "L0 — Predicted vs Observed (test)")
+abline(0, 1, lty = 2)
+```
+
+### Comment
+We evaluate how the model performs on new, unseen data (the test set).
+We again predict the response for test observations and compare the predictions with the true y values.
+The test RMSE shows how well the model generalizes beyond the training data.
+
+For my model, the test RMSE 0.25, which is very close to the PCR model’s test RMSE (0.24).
+This means that both methods achieve similar predictive accuracy.
+
+## (2e) Compare coefficients from PCR and L0 (no intercept)
+```{r}
+
+# 1) PCR: coefficients at chosen number of components (no intercept)
+
+B_pcr <- coef(fit_pcr, ncomp = best_ncomp, intercept = FALSE)  # array [p x 1 x 1]
+b_pcr <- drop(B_pcr)                                           # numeric vector length p
+names(b_pcr) <- dimnames(B_pcr)[[1]]
+
+# 2) L0: coefficients at best lambda (drop intercept row)
+
+B_l0 <- as.matrix(coef(fit_full, lambda = best_lambda))        # [p+1 x 1], row 1 = (Intercept)
+rn_l0 <- rownames(B_l0)
+b_l0  <- B_l0[rn_l0 != "(Intercept)", 1]                       # numeric vector length p
+
+if (is.null(names(b_l0))) names(b_l0) <- colnames(X_train)
+
+# 3) Align on union of variable names; fill missing with 0
+
+all_vars <- union(names(b_pcr), names(b_l0))
+PCR <- b_pcr[all_vars]; PCR[is.na(PCR)] <- 0
+L0  <-  b_l0[all_vars];  L0[is.na(L0)]  <- 0
+
+coef_cmp <- data.frame(variable = all_vars, PCR = as.numeric(PCR), L0 = as.numeric(L0))
+
+# 4) Plot: PCR vs L0 coefficients (one point per variable)
+
+plot(coef_cmp$PCR, coef_cmp$L0,
+xlab = "PCR coefficient (no intercept)",
+ylab = "L0 coefficient (no intercept)",
+main = "PCR vs L0 coefficients",
+pch = 19, col = "steelblue")
+abline(h = 0, v = 0, lty = 3, col = "grey40")
+abline(0, 1, lty = 2, col = "red")  # 45° line: perfect agreement
+
+# 5) Print top |coeff| variables (either method) for quick inspection
+
+coef_cmp$abs_max <- pmax(abs(coef_cmp$PCR), abs(coef_cmp$L0))
+top <- head(coef_cmp[order(-coef_cmp$abs_max), c("variable","PCR","L0")], 12)
+row.names(top) <- NULL
+print(top)
+```
+### Comment
+This plot compares the regression coefficients estimated by PCR and L0 regression (both without the intercept).
+
+We can clearly see how different the two approaches behave:
+
+PCR spreads the effect across many variables — most coefficients are small but nonzero.
+
+L0 regression, on the other hand, keeps almost all coefficients equal to zero because the chosen lambda is quite strong. Only the intercept remains important.
+
+This shows that the L0 penalty enforces very strong sparsity — it tries to keep the model as simple as possible, even if that means ignoring most predictors.
+
+Despite being almost empty, the L0 model still reaches nearly the same RMSE on the test set as PCR.
+That means both methods capture the main pattern in the data (the general level of the response), but they do it in very different ways:
+PCR uses many small correlated effects, while L0 compresses everything into a minimal form that is easier to interpret but less detailed.
+
+In short, PCR focuses on explaining variance, whereas L0 focuses on selecting only the most essential predictors — 
+in this case, the result shows that none of the predictors stand out strongly enough to survive heavy penalization.

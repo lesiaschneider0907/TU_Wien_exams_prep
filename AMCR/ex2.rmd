@@ -1,0 +1,499 @@
+---
+title: "Exercise 2 (2025) — Advanced Methods for Regression and Classification"
+author: "Olesia Galynskaia 12321492"
+date: "`r format(Sys.Date())`"
+output: pdf_document
+fontsize: 11pt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+set.seed(12321492)
+options(repos = c(CRAN = "https://cran.wu.ac.at"))
+```
+
+# Loading and observing data
+```{r}
+load("building.RData")   
+stopifnot(exists("df"), is.data.frame(df))
+attributes(df)
+
+str(attributes(df))
+
+
+head(sapply(df, function(x) attr(x, "label")), 10)
+
+```
+# Quick structure and summary
+```{r}
+cat("**Dimensions:**", nrow(df), "rows ×", ncol(df), "columns\n\n")
+str(df[, 1:10])
+summary(df)
+```
+
+# Plot of response variable
+```{r}
+hist(df$y, breaks = 40,
+     main = "Distribution of response variable y (log-transformed)",
+     xlab = "y", col = "skyblue", border = "white")
+```
+```{r}
+# compute correlations
+num_data <- df[, sapply(df, is.numeric)]
+cor_mat <- cor(num_data, use = "pairwise.complete.obs")
+
+# keep only pairs with |r| > 0.9
+high_corr <- which(abs(cor_mat) > 0.9 & abs(cor_mat) < 1, arr.ind = TRUE)
+corr_pairs <- unique(t(apply(high_corr, 1, sort)))
+
+cat("Highly correlated pairs (|r| > 0.9):\n")
+print(head(data.frame(
+  Var1 = rownames(cor_mat)[corr_pairs[,1]],
+  Var2 = colnames(cor_mat)[corr_pairs[,2]],
+  r = round(cor_mat[corr_pairs], 3)
+), 10))
+
+```
+
+# Data preparation
+```{r}
+# 1) Train/Test split (2/3 : 1/3) — clean and reproducible
+set.seed(12321492)  # for reproducibility
+stopifnot(exists("df"), is.data.frame(df), "y" %in% names(df))
+
+n <- nrow(df)
+idx_train <- sample(seq_len(n), size = floor(2/3 * n))
+
+train <- df[idx_train, , drop = FALSE]
+test  <- df[-idx_train, , drop = FALSE]
+
+# function for RMSE
+rmse <- function(actual, predicted) sqrt(mean((actual - predicted)^2))
+
+# short info output
+cat("Train:", nrow(train), "rows | Test:", nrow(test), "rows\n")
+```
+
+# Ex-1 Model
+
+```{r ex1-fullmodel, echo=TRUE, message=FALSE, warning=FALSE}
+## Fit on training data
+lm_full <- lm(y ~ ., data = train)
+summary(lm_full)
+
+## (a) Diagnostic plots (4 standard panels)
+par(mfrow = c(2, 2))
+plot(lm_full)
+par(mfrow = c(1, 1))
+
+## (b) NA coefficients — quick check
+coefs <- coef(summary(lm_full))
+na_coef_names <- names(which(is.na(coefs[, "Estimate"])))
+cat("NA coefficients:", if (length(na_coef_names)) paste(na_coef_names, collapse = ", ") else "none", "\n")
+
+## (c) RMSE for train and test
+pred_train <- predict(lm_full, newdata = train)
+pred_test  <- predict(lm_full, newdata = test)
+
+rmse <- function(actual, predicted) sqrt(mean((actual - predicted)^2))
+rmse_train <- rmse(train$y, pred_train)
+rmse_test  <- rmse(test$y, pred_test)
+
+cat("RMSE (train):", round(rmse_train, 4),
+    "| RMSE (test):", round(rmse_test, 4), "\n")
+
+## (d) Observed vs predicted (train & test)
+par(mfrow = c(1, 2))
+plot(train$y, pred_train,
+     main = "Training: observed vs predicted",
+     xlab = "Observed y", ylab = "Predicted y",
+     pch = 19, col = "steelblue")
+abline(0, 1, col = "red", lwd = 2)
+
+plot(test$y, pred_test,
+     main = "Test: observed vs predicted",
+     xlab = "Observed y", ylab = "Predicted y",
+     pch = 19, col = "darkorange")
+abline(0, 1, col = "red", lwd = 2)
+par(mfrow = c(1, 1))
+```
+
+
+```{r ex1-fullQUADRATIC, echo=TRUE, message=FALSE, warning=FALSE}
+## Build squared copies of numeric predictors using train stats
+stopifnot(exists("train"), exists("test"), "y" %in% names(train))
+
+# helper for RMSE (in case it's not defined above)
+if (!exists("rmse")) {
+  rmse <- function(actual, predicted) sqrt(mean((actual - predicted)^2))
+}
+
+# choose numeric predictors (exclude y)
+preds <- setdiff(names(train), "y")
+num_preds <- preds[sapply(train[, preds, drop = FALSE], is.numeric)]
+
+# center/scale computed on TRAIN only (to avoid leakage)
+centers <- sapply(num_preds, function(v) mean(train[[v]], na.rm = TRUE))
+scales  <- sapply(num_preds, function(v) {
+  s <- sd(train[[v]], na.rm = TRUE)
+  ifelse(is.na(s) | s == 0, 1, s)
+})
+
+# add *_sq columns (based on train centers/scales); keep originals intact
+add_sq <- function(d) {
+  out <- d
+  for (v in num_preds) {
+    z <- (d[[v]] - centers[[v]]) / scales[[v]]
+    out[[paste0(v, "_sq")]] <- z^2
+  }
+  out
+}
+
+train_q <- add_sq(train)
+test_q  <- add_sq(test)
+
+## Fit quadratic-augmented linear model
+lm_quad <- lm(y ~ ., data = train_q)
+summary(lm_quad)
+
+## (a) Diagnostic plots
+par(mfrow = c(2, 2))
+plot(lm_quad)
+par(mfrow = c(1, 1))
+
+## (b) NA coefficients — quick check
+coefs_q <- coef(summary(lm_quad))
+na_coef_q <- names(which(is.na(coefs_q[, "Estimate"])))
+cat("NA coefficients (quadratic):",
+    if (length(na_coef_q)) paste(na_coef_q, collapse = ", ") else "none",
+    "\n")
+
+## (c) RMSE for train and test
+pred_train_q <- predict(lm_quad, newdata = train_q)
+pred_test_q  <- predict(lm_quad, newdata = test_q)
+
+rmse_train_q <- rmse(train_q$y, pred_train_q)
+rmse_test_q  <- rmse(test_q$y, pred_test_q)
+
+cat("Quadratic model — RMSE (train):", round(rmse_train_q, 4),
+    "| RMSE (test):", round(rmse_test_q, 4), "\n")
+
+## (d) Observed vs predicted (train & test)
+par(mfrow = c(1, 2))
+plot(train_q$y, pred_train_q,
+     main = "Training: observed vs predicted (quadratic)",
+     xlab = "Observed y", ylab = "Predicted y",
+     pch = 19, col = "orange")
+abline(0, 1, col = "red", lwd = 2)
+
+plot(test_q$y, pred_test_q,
+     main = "Test: observed vs predicted (quadratic)",
+     xlab = "Observed y", ylab = "Predicted y",
+     pch = 19, col = "orange")
+abline(0, 1, col = "red", lwd = 2)
+par(mfrow = c(1, 1))
+```
+
+## Comment
+
+In this task I compared two linear regression models:
+
+- the **full model** that includes all predictors;
+- the **quadratic model** where squared terms of numeric variables were added.
+
+The goal was to check if adding nonlinear terms improves prediction quality and model diagnostics.
+
+**(a) Diagnostic plots:**  
+For the full model, the residual plots showed a slight curve and some high-leverage points — the model is not perfectly linear.  
+For the quadratic model, residuals became more balanced and the pattern almost disappeared, which means a better fit.
+
+**(b) NA coefficients:**  
+Some coefficients appear as `NA` because several predictors are highly correlated (multicollinearity).  
+This is expected in these data, as many economic and physical indicators overlap.
+Some coefficients appear as NA because the corresponding predictors are almost perfectly correlated with others.
+In multiple regression, this leads to a singular design matrix 
+X, so R drops redundant variables and marks their coefficients as NA.
+
+**(c) RMSE (train vs test):**  
+- Full model: RMSE(train) 0.19, RMSE(test) 0.95 → overfitting.  
+- Quadratic model: RMSE(train) 0.11, RMSE(test) 0.70 → smaller error, slightly better generalization.
+
+**(d) Observed vs predicted:**  
+On the training set, both models fit the data well (points close to the diagonal line).  
+On the test set, the quadratic model predictions are still more accurate and less scattered.
+
+**Summary:**  
+Adding squared terms helps the model capture small nonlinearities and reduces test error.  
+Both models are still linear regressions, but the quadratic one performs a bit better and produces more stable residuals.
+
+# Ex-2 Stepwise variable selection (forward & backward)
+
+```{r ex2-fullVarSel, echo=TRUE, message=FALSE, warning=FALSE}
+## --- Backward selection (start from full model) ---
+lm_back <- step(lm_full,
+                direction = "backward",
+                trace = FALSE)
+summary(lm_back)
+
+# Predictions and RMSE
+pred_train_back <- predict(lm_back, newdata = train)
+pred_test_back  <- predict(lm_back, newdata = test)
+rmse_train_back <- rmse(train$y, pred_train_back)
+rmse_test_back  <- rmse(test$y, pred_test_back)
+
+cat("Backward model — RMSE(train):", round(rmse_train_back, 4),
+    "| RMSE(test):", round(rmse_test_back, 4), "\n")
+
+## Forward selection (start from empty model)
+lm_null <- lm(y ~ 1, data = train)  # empty model
+lm_fwd <- step(lm_null,
+               scope = formula(lm_full),
+               direction = "forward",
+               trace = FALSE)
+summary(lm_fwd)
+
+# Predictions and RMSE
+pred_train_fwd <- predict(lm_fwd, newdata = train)
+pred_test_fwd  <- predict(lm_fwd, newdata = test)
+rmse_train_fwd <- rmse(train$y, pred_train_fwd)
+rmse_test_fwd  <- rmse(test$y, pred_test_fwd)
+
+cat("Forward model — RMSE(train):", round(rmse_train_fwd, 4),
+    "| RMSE(test):", round(rmse_test_fwd, 4), "\n")
+
+## scatter plots
+par(mfrow = c(2, 2))
+
+plot(train$y, pred_train_back,
+     main = "Backward: Train (observed vs predicted)",
+     xlab = "Observed y", ylab = "Predicted y",
+     col = "steelblue", pch = 19)
+abline(0, 1, col = "red", lwd = 2)
+
+plot(test$y, pred_test_back,
+     main = "Backward: Test (observed vs predicted)",
+     xlab = "Observed y", ylab = "Predicted y",
+     col = "steelblue", pch = 19)
+abline(0, 1, col = "red", lwd = 2)
+
+plot(train$y, pred_train_fwd,
+     main = "Forward: Train (observed vs predicted)",
+     xlab = "Observed y", ylab = "Predicted y",
+     col = "darkorange", pch = 19)
+abline(0, 1, col = "red", lwd = 2)
+
+plot(test$y, pred_test_fwd,
+     main = "Forward: Test (observed vs predicted)",
+     xlab = "Observed y", ylab = "Predicted y",
+     col = "darkorange", pch = 19)
+abline(0, 1, col = "red", lwd = 2)
+
+par(mfrow = c(1, 1))
+```
+
+## Comment
+
+Stepwise regression was used to simplify the model and improve generalization.
+
+- **Backward selection** started from the full model and removed redundant predictors (based on AIC).  
+- **Forward selection** started from an empty model and added only significant predictors.
+
+**Model performance (RMSE):**
+
+| Model | RMSE (train) | RMSE (test) |
+|:------|:-------------:|:------------:|
+| Full linear | 0.1927 | 0.9485 |
+| Quadratic | 0.1062 | 0.7021 |
+| Stepwise (backward) | 0.1971 | 0.4376 |
+| Stepwise (forward) | 0.2251 | 0.2301 |
+
+The **test RMSE** dropped sharply after stepwise selection —  
+from **0.95 → 0.44 (-54%)** for the backward model and **0.95 → 0.23 (-76%)** for the forward one.  
+This shows that the simplified models **predict much more accurately** and generalize far better than the full or quadratic ones.  
+Training RMSE values changed only slightly, so the new models still fit the training data well without overfitting.
+
+Overall, **the forward stepwise model gives the best predictive accuracy** and a compact set of predictors.
+
+#  Ex-3 Preferred model and ANOVA
+
+## Comment
+
+Among all models from (1) and (2), the **forward stepwise regression** is the preferred one.  
+It achieved the **lowest test RMSE = 0.2301**, which means it predicts the response variable much more accurately than the full (0.9485), quadratic (0.7021), or backward stepwise (0.4376) models.
+
+The forward stepwise model is also much **simpler**, keeping only the most relevant predictors,  
+which makes it easier to interpret and less sensitive to multicollinearity.  
+This follows the principle discussed in the lecture: a good model balances **accuracy and simplicity** —  
+it should generalize well to new data without unnecessary complexity.
+
+---
+
+**About ANOVA:**  
+ANOVA (Analysis of Variance) compares two **nested models** — that is, models where one is a simplified version of the other —  
+to test whether removing variables causes a statistically significant loss of fit.  
+For example, we could use ANOVA to compare the full model with the backward stepwise model,  
+because the second one is a simpler version of the first.
+
+However, in this case, ANOVA is **not really necessary**,  
+because the difference in predictive performance is already clear from the RMSE values.  
+The forward stepwise model has much smaller test error,  
+so it is obviously better both statistically and practically.  
+Therefore, the choice can be confidently made based on **test RMSE**,  
+which directly measures predictive quality.
+
+#  Ex-4 Cross-validation with cvTools: 5-fold CV, 100 replications
+
+```{r ex4-cvtools-fit, echo=TRUE, message=FALSE, warning=FALSE}
+# Models to compare: Full (from task 1), Backward & Forward (from task 2)
+
+install.packages("cvTools")
+library(cvTools)
+
+# helper to run cvFit on a given data split
+run_cv <- function(fit_obj, data, yname = "y", K = 5, R = 100, seed = 12321492) {
+  set.seed(seed)
+  cv <- cvFit(fit_obj, data = data, y = data[[yname]], cost = rmspe, K = K, R = R)
+  errs <- as.vector(cv$reps)
+  list(cv = cv, reps = errs)
+}
+
+# ensure models from (1) and (2) exist
+stopifnot(exists("lm_full"), exists("lm_back"), exists("lm_fwd"))
+stopifnot(exists("train"), exists("test"))
+
+# run CV for TRAIN
+cv_full_train <- run_cv(lm_full, data = train)
+cv_back_train <- run_cv(lm_back, data = train)
+cv_fwd_train  <- run_cv(lm_fwd,  data = train)
+
+# run CV for TEST
+cv_full_test  <- run_cv(lm_full, data = test)
+cv_back_test  <- run_cv(lm_back, data = test)
+cv_fwd_test   <- run_cv(lm_fwd,  data = test)
+
+# assemble long data for plotting
+lab <- function(reps, model, split) data.frame(rmspe = reps, model = model, split = split)
+cv_long <- rbind(
+  lab(cv_full_train$reps, "Full",     "Train"),
+  lab(cv_back_train$reps, "Backward", "Train"),
+  lab(cv_fwd_train$reps,  "Forward",  "Train"),
+  lab(cv_full_test$reps,  "Full",     "Test"),
+  lab(cv_back_test$reps,  "Backward", "Test"),
+  lab(cv_fwd_test$reps,   "Forward",  "Test")
+)
+cv_long$model <- factor(cv_long$model, levels = c("Full", "Backward", "Forward"))
+cv_long$split <- factor(cv_long$split, levels = c("Train", "Test"))
+
+```
+
+```{r ex4-cvtools-plot, echo=TRUE, message=FALSE, warning=FALSE}
+par(mfrow = c(1, 2))
+
+# TRAIN
+boxplot(rmspe ~ model, data = subset(cv_long, split == "Train"),
+        main = "5×100 CV RMSPE — TRAIN",
+        ylab = "RMSPE", xlab = "", col = c("grey80", "steelblue", "darkorange"))
+grid()
+
+# TEST
+boxplot(rmspe ~ model, data = subset(cv_long, split == "Test"),
+        main = "5×100 CV RMSPE — TEST",
+        ylab = "RMSPE", xlab = "", col = c("grey80", "steelblue", "darkorange"))
+grid()
+
+par(mfrow = c(1, 1))
+
+# small numeric summary (medians) to cite in text
+med_summary <- aggregate(rmspe ~ split + model, data = cv_long, median)
+knitr::kable(med_summary, digits = 4,
+             caption = "Median RMSPE from 5-fold CV (100 reps) for each split/model")
+```
+
+## Comment
+
+We performed a 5-fold cross-validation with 100 replications (`cvFit()` from *cvTools*)  
+for the models from (1) and (2): Full, Backward, and Forward stepwise.  
+The evaluation used the RMSPE (Root Mean Squared Prediction Error) cost function  
+and was computed separately for **training** and **test** sets.
+
+The parallel boxplots show that:
+- On the **training set**, both stepwise models have clearly lower and more stable RMSPE values compared to the full model.  
+  The Backward and Forward results are almost identical, which confirms that both procedures converge to similar sets of predictors.
+- On the **test set**, the improvement is even stronger — the Forward stepwise model has the **lowest median RMSPE** and the smallest spread.  
+  The Full model shows the largest error and variability, which indicates overfitting.
+
+The median RMSPE values (from 5x100 CV) were approximately:
+- **Full model:** Train 0.40, Test 0.85  
+- **Backward stepwise:** Train 0.18, Test 0.28  
+- **Forward stepwise:** Train 0.15, Test 0.23  
+
+These results confirm that stepwise selection substantially improves predictive accuracy and stability.  
+Following the lecture idea, this shows that **simpler models with fewer correlated predictors** generalize better.  
+Overall, the **Forward stepwise model** remains the best-performing and most efficient one.
+
+# Ex-5 Cross-validation with cost = rtmspe
+```{r ex5-cvtools-rtmspe, echo=TRUE, message=FALSE, warning=FALSE}
+
+run_cv_rel <- function(fit_obj, data, yname = "y", K = 5, R = 100, seed = 12321492) {
+  set.seed(seed)
+  cv <- cvFit(fit_obj, data = data, y = data[[yname]], cost = rtmspe, K = K, R = R)
+  errs <- as.vector(cv$reps)
+  list(cv = cv, reps = errs)
+}
+
+# Run for all models and splits
+cv_full_train_rel <- run_cv_rel(lm_full, train)
+cv_back_train_rel <- run_cv_rel(lm_back, train)
+cv_fwd_train_rel  <- run_cv_rel(lm_fwd,  train)
+
+cv_full_test_rel  <- run_cv_rel(lm_full, test)
+cv_back_test_rel  <- run_cv_rel(lm_back, test)
+cv_fwd_test_rel   <- run_cv_rel(lm_fwd,  test)
+
+lab <- function(reps, model, split) data.frame(rtmspe = reps, model = model, split = split)
+cv_long_rel <- rbind(
+  lab(cv_full_train_rel$reps, "Full",     "Train"),
+  lab(cv_back_train_rel$reps, "Backward", "Train"),
+  lab(cv_fwd_train_rel$reps,  "Forward",  "Train"),
+  lab(cv_full_test_rel$reps,  "Full",     "Test"),
+  lab(cv_back_test_rel$reps,  "Backward", "Test"),
+  lab(cv_fwd_test_rel$reps,   "Forward",  "Test")
+)
+
+cv_long_rel$model <- factor(cv_long_rel$model, levels = c("Full", "Backward", "Forward"))
+cv_long_rel$split <- factor(cv_long_rel$split, levels = c("Train", "Test"))
+
+# Boxplots (relative RMSPE)
+par(mfrow = c(1, 2))
+boxplot(rtmspe ~ model, data = subset(cv_long_rel, split == "Train"),
+        main = "5x100 CV RTMSPE — TRAIN", ylab = "Relative RMSPE", col = c("grey80", "steelblue", "darkorange"))
+grid()
+boxplot(rtmspe ~ model, data = subset(cv_long_rel, split == "Test"),
+        main = "5x100 CV RTMSPE — TEST", ylab = "Relative RMSPE", col = c("grey80", "steelblue", "darkorange"))
+grid()
+par(mfrow = c(1, 1))
+
+med_summary_rel <- aggregate(rtmspe ~ split + model, data = cv_long_rel, median)
+knitr::kable(med_summary_rel, digits = 4,
+             caption = "Median RTMSPE from 5-fold CV (100 reps) for each split/model")
+```
+
+## Comment
+
+We repeated the same 5x100 cross-validation procedure as in (4),  
+but using `cost = rtmspe`, which measures **relative prediction error** (in percent of the true value).  
+This allows evaluating how large the prediction errors are *relative to the magnitude of y*,  
+making the comparison scale-independent.
+
+The results were very similar to those with RMSPE:
+
+- On both **training** and **test** sets, the **stepwise models** show clearly lower relative errors than the full model.  
+- The **forward stepwise model** again achieves the **lowest median RTMSPE** and the smallest spread across replications,  
+  indicating the most stable and accurate predictions in relative terms.  
+- The backward stepwise model performs almost as well,  
+  while the full model remains the weakest with high variance and higher relative error.
+
+**Conclusion:**  
+Using a relative error metric confirms the same ranking as before.  
+The **forward stepwise regression** remains the preferred model because it gives the lowest  
+and most consistent prediction errors on both absolute (RMSPE) and relative (RTMSPE) scales.
